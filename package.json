@@ -1,0 +1,16 @@
+{
+  "name": "boothpath",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "박람회 부스 선택과 관람 동선 계획 도구",
+  "scripts": {
+    "start": "node dev.mjs",
+    "dev": "node dev.mjs",
+    "build": "node build.mjs",
+    "test": "node --test engine.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
