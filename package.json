@@ -8,7 +8,7 @@
     "start": "node dev.mjs",
     "dev": "node dev.mjs",
     "build": "node build.mjs",
-    "test": "node --test engine.test.js"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"

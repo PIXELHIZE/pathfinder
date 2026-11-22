@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const projectDirectory = path.dirname(fileURLToPath(import.meta.url));
 const outputDirectory = path.join(projectDirectory, 'dist');
-const requiredFiles = ['index.html', 'styles.css', 'app.js', 'data.js', 'engine.js'];
+const requiredFiles = ['index.html', 'styles.css', 'app.js', 'exhibitions.js', 'engine.js', 'comicworld.js', 'cafe2026.js', 'illustar.js'];
 
 // Validate inputs before replacing an existing build.
 for (const filename of requiredFiles) {
