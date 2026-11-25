@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="154 151 1852 396" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">Pathfinder</title>
+  <defs>
+    <linearGradient id="orbit" gradientUnits="userSpaceOnUse" x1="165" y1="458" x2="1172" y2="163">
+      <stop stop-color="#efc4fa"/>
+      <stop offset=".15" stop-color="#fff0dc"/>
+      <stop offset=".55" stop-color="#f1e7ff"/>
+      <stop offset="1" stop-color="#9dbfff"/>
+    </linearGradient>
+    <linearGradient id="monogram" gradientUnits="userSpaceOnUse" x1="388" y1="417" x2="558" y2="190">
+      <stop stop-color="#ffeac7"/>
+      <stop offset=".51" stop-color="#fff4ef"/>
+      <stop offset="1" stop-color="#eeedff"/>
+    </linearGradient>
+    <linearGradient id="letters" gradientUnits="userSpaceOnUse" x1="620" y1="290" x2="1970" y2="371">
+      <stop stop-color="#f7eff7"/>
+      <stop offset=".49" stop-color="#f1f3ff"/>
+      <stop offset=".8" stop-color="#cbe4fc"/>
+      <stop offset="1" stop-color="#c0cbfa"/>
+    </linearGradient>
+    <linearGradient id="tail" gradientUnits="userSpaceOnUse" x1="1875" y1="412" x2="1900" y2="290">
+      <stop stop-color="#b8cef9"/>
+      <stop offset=".66" stop-color="#c4d5fc"/>
+      <stop offset="1" stop-color="#d9c6f7"/>
+    </linearGradient>
+    <linearGradient id="underline" gradientUnits="userSpaceOnUse" x1="375" y1="515" x2="1798" y2="442">
+      <stop stop-color="#d7a4f3"/>
+      <stop offset=".36" stop-color="#fae9ff"/>
+      <stop offset=".72" stop-color="#b4ccff"/>
+      <stop offset="1" stop-color="#91b8ff"/>
+    </linearGradient>
+  </defs>
+
+  <g fill="url(#orbit)">
+    <path d="M376 295C277 329 190 395 190 426c0 31 78 16 161-20l-14 25c-83 34-132 43-156 31-53-25 27-107 195-167Z"/>
+    <path d="M662 257C802 204 954 169 1069 162c74-4 135 3 164 22 20 14 19 36 1 60 16-24 17-45-2-59-29-18-88-22-162-16-124 11-277 56-413 110Z"/>
+  </g>
+
+  <g fill="url(#monogram)">
+    <path d="M322 237C396 213 487 200 562 205c64 4 98 17 104 44 8 37-30 73-75 93-45 20-110 26-177 29 112-24 197-64 201-105 3-26-25-33-83-36-71-4-153 0-210 7Z"/>
+    <path d="m399 297 24-3c8-2 17-8 27-14l-66 142c-3 7-6 11-12 15l-61 50Z"/>
+  </g>
+  <path fill="#ffedcf" d="M523 241c-4 18-6 32-8 46 11 3 26 6 45 8-19 2-35 5-49 9-9 13-17 29-24 44l7-45c-13-4-28-6-43-7 19-2 34-5 48-9 9-15 17-29 24-46Z"/>
+
+  <g fill="url(#letters)" fill-rule="evenodd">
+    <path d="M668 297h98c32 0 43 16 30 45l-32 74H614c-16 0-14-13-3-36 13-27 32-40 55-40h70c11 0 13 6 17-3 6-14 0-20-10-20h-90c6-6 11-13 15-20Zm15 62c-15 0-24 8-29 22-5 13 0 16 10 16h47c12 0 20-6 24-16l9-22Z"/>
+    <path d="M860 260h44l-16 36h53l-21 20h-40l-26 59c-7 16-5 21 10 21h31l-10 19h-57c-26 0-29-15-16-44l24-55h-21l12-20h17Z"/>
+    <path d="M971 246h45l-24 55c7-4 14-5 23-5h42c33 0 43 18 30 47l-31 72h-45l32-73c9-20 1-26-12-26h-32c-9 0-13 2-17 9l-40 90h-45Z"/>
+    <path d="M1264 244l-10 20h-42c-13 0-20 5-27 23l-3 8h57l-20 20h-46l-44 99h-45l44-99h-20l12-20h17l4-10c12-28 30-41 57-41Z"/>
+    <path d="M1258 295h47l-46 105c-2 5-3 9-2 14h-49l44-103c3-6 3-9 2-12Z"/>
+    <path d="M1313 204c-2 13-4 24-4 34 8 4 17 7 27 8-11 1-22 4-32 8-8 12-15 23-20 35 2-13 4-24 3-35-7-4-14-6-23-7l30-9c7-10 14-22 19-34Z"/>
+    <path d="M1324 295h45l-2 6c7-5 14-7 23-7h43c32 0 42 20 27 52l-28 67h-46l32-72c8-19 3-27-14-27h-35c-6 0-9 3-12 9l-39 90h-45Z"/>
+    <path d="M1634 244l45-1-71 169h-122c-26 0-29-17-18-45l14-33c12-27 33-41 61-41h51c6 0 13 1 18 4Zm-76 69c-16 0-26 9-33 26l-14 31c-7 16-2 23 13 23h47l29-66c4-11 1-14-8-14Z"/>
+    <path d="M1718 293h93c17 0 18 12 11 29l-5 12c-7 17-18 27-33 27h-91l-6 14c-5 12-1 17 11 17h93l-15 20h-113c-25 0-29-18-18-43l16-36c12-27 34-40 57-40Zm18 20c-19 0-26 8-32 21l-3 11c8-3 15-4 24-4h40c5 0 7-3 9-8l5-13c2-6-1-7-8-7Z"/>
+  </g>
+  <path fill="url(#tail)" d="M1996 292l-35 20h-50c-19 0-27 8-34 24l-32 75h-45l37-85c12-24 29-34 52-34Z"/>
+
+  <path fill="url(#underline)" d="M375 537C726 457 1118 425 1798 443 1173 442 723 471 375 537Z"/>
+</svg>

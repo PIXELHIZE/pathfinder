@@ -1,142 +1,15 @@
 <!doctype html>
 <html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f5f7fb">
-  <meta name="description" content="실제 행사 배치도에서 부스를 고르고, 방문 순서와 이동 경로를 계획하세요.">
-  <title>부스패스 · 행사 탐색</title>
-  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css">
-  <script type="module" src="./app.js"></script>
-</head>
-<body>
-  <a class="skip-link" href="#main">본문으로 이동</a>
-  <header class="app-header">
-    <div class="header-inner">
-      <a class="brand" href="?view=home" data-nav="home">
-        <span class="brand-mark"><img src="./favicon.svg" width="34" height="34" alt=""></span>
-        <span>부스패스</span>
-      </a>
-      <nav class="app-nav" aria-label="주 메뉴">
-        <a href="?view=home" data-nav="home" aria-current="page">행사 탐색</a>
-        <a href="?view=plan" data-nav="plan">동선 설계</a>
-        <a href="?view=tour" data-nav="tour">내 동선</a>
-      </nav>
-      <div class="header-action"><button id="share" class="secondary" type="button" hidden>동선 공유</button></div>
-    </div>
-  </header>
-  <main class="app-main" id="main">
-    <section data-screen="home" aria-labelledby="home-title">
-      <div class="home-intro">
-        <div>
-          <h1 id="home-title" tabindex="-1">어떤 행사를 둘러볼까요?</h1>
-          <p>실제 배치도에서 부스를 고르고, 나만의 방문 순서를 만들어 보세요.</p>
-        </div>
-        <div class="resume-card" id="resume-card" hidden></div>
-      </div>
-      <div class="catalogue-heading">
-        <h2>행사 목록</h2>
-        <span>종료된 행사의 공식 배치도</span>
-      </div>
-      <div id="catalogue-grid" class="event-grid"></div>
-    </section>
-
-    <section data-screen="plan" aria-labelledby="plan-title" hidden>
-      <div class="screen-header">
-        <div>
-          <a class="breadcrumb" href="?view=home" data-nav="home">행사 목록</a>
-          <h1 id="plan-title" tabindex="-1"></h1>
-          <p id="event-info"></p>
-        </div>
-        <div class="screen-actions"><a class="secondary" href="?view=tour" data-nav="tour" id="view-route" hidden>내 동선 보기</a></div>
-      </div>
-      <section class="event-settings panel" aria-label="행사 및 출발점 설정">
-        <label>행사·구역<select id="event"></select></label>
-        <label>출발점<select id="start"></select></label>
-        <label class="inline-check"><input id="return" type="checkbox"> 출발점으로 돌아오기</label>
-      </section>
-      <div class="planner">
-        <section class="booth-panel panel" aria-labelledby="booth-title">
-          <div class="section-heading"><h2 id="booth-title">부스 선택</h2><button id="clear" class="text-button" type="button">선택 해제</button></div>
-          <div class="mode" aria-label="선택 방식">
-            <button id="manual" type="button" aria-pressed="true">직접 고르기</button>
-            <button id="recommend" type="button" aria-pressed="false">추천받기</button>
-          </div>
-          <form id="recommend-form" hidden>
-            <div class="recommend-fields">
-              <label>방문할 개수<input id="count" type="number" inputmode="numeric" min="1" value="6" required></label>
-              <label>추천 기준<select id="priority"></select></label>
-              <label>관심 분야<select id="interest"></select></label>
-            </div>
-            <button class="primary" type="submit">추천하고 동선 만들기</button>
-            <p id="recommend-note"></p>
-          </form>
-          <div class="search-fields">
-            <input id="search" type="search" placeholder="부스 이름 또는 번호" aria-label="부스 이름 또는 번호 검색">
-            <label class="inline-check"><input id="only-selected" type="checkbox"> 선택만</label>
-          </div>
-          <p id="results" class="results"></p>
-          <div id="booths" class="booth-list" aria-label="부스 목록"></div>
-          <div class="selection">
-            <span id="selected-count" aria-live="polite">0곳 선택</span>
-            <button id="plan" class="primary" type="button" disabled>동선 만들기</button>
-          </div>
-        </section>
-        <div id="plan-map-slot" class="map-slot">
-          <section id="map-panel" class="map-panel panel" aria-labelledby="map-title">
-            <div class="section-heading">
-              <div class="map-heading"><h2 id="map-title">전시장 지도</h2><span class="map-badge" id="map-route-summary" hidden></span></div>
-              <div class="map-controls" aria-label="지도 크기">
-                <button id="zoom-out" type="button" aria-label="지도 축소">−</button>
-                <button id="zoom-in" type="button" aria-label="지도 확대">+</button>
-                <button id="fit" type="button">전체 보기</button>
-              </div>
-            </div>
-            <div id="map-viewport" class="map-viewport" tabindex="0" aria-label="전시장 지도. 확대 후 스크롤하여 이동할 수 있습니다.">
-              <svg id="map" role="img" aria-labelledby="map-svg-title map-description"></svg>
-            </div>
-            <div class="map-caption"><span id="map-status"></span><span id="sources"></span></div>
-          </section>
-        </div>
-      </div>
-    </section>
-
-    <section data-screen="tour" aria-labelledby="tour-title" hidden>
-      <div class="screen-header">
-        <div>
-          <a class="breadcrumb" href="?view=plan" data-nav="plan">동선 설계</a>
-          <h1 id="tour-title" tabindex="-1">내 동선</h1>
-          <p id="tour-info"></p>
-        </div>
-        <div class="screen-actions" id="tour-actions"><a class="secondary" href="?view=plan" data-nav="plan">동선 수정</a></div>
-      </div>
-      <section id="tour-empty" class="tour-empty panel" hidden>
-        <h2>만들어 둔 동선이 없어요</h2>
-        <p>행사를 고른 뒤 방문할 부스를 선택하면 여기에 방문 순서가 표시됩니다.</p>
-        <a class="primary" href="?view=plan" data-nav="plan">동선 설계하기</a>
-      </section>
-      <div class="tour-layout" id="tour-layout" hidden>
-        <section class="tour-progress panel" id="tour-progress" aria-label="관람 진행" aria-live="polite"></section>
-        <div id="tour-map-slot" class="map-slot"></div>
-        <section class="route-panel panel" aria-labelledby="route-title">
-          <div class="section-heading"><h2 id="route-title">방문 순서</h2></div>
-          <div id="route"></div>
-          <button type="button" id="replan" class="secondary" hidden>현재 부스에서 다시 계산</button>
-        </section>
-      </div>
-    </section>
-  </main>
-  <dialog id="share-dialog" class="share-dialog" aria-labelledby="share-title">
-    <form method="dialog">
-      <div class="section-heading"><h2 id="share-title">동선 공유</h2><button class="text-button" aria-label="공유 창 닫기">닫기</button></div>
-      <p>링크를 열면 같은 행사와 방문 순서를 볼 수 있습니다.</p>
-      <div class="share-fields">
-        <input id="share-url" type="url" readonly aria-label="공유할 동선 링크">
-        <button id="copy-share" class="primary" type="button">링크 복사</button>
-      </div>
-    </form>
-  </dialog>
-  <div id="status" role="status" aria-live="polite"></div>
-</body>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f5f6f8">
+    <meta name="description" content="실제 행사 배치도에서 부스를 고르고, 방문 순서와 이동 경로를 계획하세요.">
+    <link rel="icon" href="./src/assets/favicon.svg" type="image/svg+xml">
+    <title>부스패스 · 행사 탐색</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/main.jsx"></script>
+  </body>
 </html>

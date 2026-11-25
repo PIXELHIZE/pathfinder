@@ -1,7 +1,5 @@
 /** Walkway-aware route and recommendation engine. No network or DOM dependencies. */
 const EPSILON = 0.000001;
-const DEFAULT_AISLES_X = [66, 288, 500, 712, 934];
-const DEFAULT_AISLES_Y = [76, 264, 456, 648];
 const graphCache = new WeakMap();
 const MAX_CACHED_SOURCES = 64;
 
@@ -36,6 +34,36 @@ function materializeGraph(segments, basePoints) {
   return { segments, points, indices, adjacency, sources: new Map() };
 }
 
+function pushByDistance(queue, node, distance) {
+  const entry = { node, distance };
+  let index = queue.length;
+  queue.push(entry);
+  while (index > 0) {
+    const parent = (index - 1) >> 1;
+    if (queue[parent].distance <= distance) break;
+    queue[index] = queue[parent];
+    index = parent;
+  }
+  queue[index] = entry;
+}
+
+function takeClosest(queue) {
+  const first = queue[0];
+  const last = queue.pop();
+  if (queue.length) {
+    let index = 0;
+    while (index * 2 + 1 < queue.length) {
+      let child = index * 2 + 1;
+      if (child + 1 < queue.length && queue[child + 1].distance < queue[child].distance) child++;
+      if (queue[child].distance >= last.distance) break;
+      queue[index] = queue[child];
+      index = child;
+    }
+    queue[index] = last;
+  }
+  return first;
+}
+
 function pathsFrom(graph, start) {
   const cached = graph.sources.get(start);
   if (cached) {
@@ -45,46 +73,18 @@ function pathsFrom(graph, start) {
   }
   const distances = new Float64Array(graph.points.length).fill(Infinity);
   const previous = new Int32Array(graph.points.length).fill(-1);
-  const heap = [];
-  const push = (node, distance) => {
-    const entry = { node, distance };
-    let index = heap.length;
-    heap.push(entry);
-    while (index > 0) {
-      const parent = (index - 1) >> 1;
-      if (heap[parent].distance <= distance) break;
-      heap[index] = heap[parent];
-      index = parent;
-    }
-    heap[index] = entry;
-  };
-  const pop = () => {
-    const first = heap[0];
-    const last = heap.pop();
-    if (heap.length) {
-      let index = 0;
-      while (index * 2 + 1 < heap.length) {
-        let child = index * 2 + 1;
-        if (child + 1 < heap.length && heap[child + 1].distance < heap[child].distance) child++;
-        if (heap[child].distance >= last.distance) break;
-        heap[index] = heap[child];
-        index = child;
-      }
-      heap[index] = last;
-    }
-    return first;
-  };
+  const queue = [];
   distances[start] = 0;
-  push(start, 0);
-  while (heap.length) {
-    const { node, distance } = pop();
+  pushByDistance(queue, start, 0);
+  while (queue.length) {
+    const { node, distance } = takeClosest(queue);
     if (distance > distances[node] + EPSILON) continue;
     for (const [next, length] of graph.adjacency[node]) {
       const candidate = distance + length;
       if (candidate < distances[next] - EPSILON) {
         distances[next] = candidate;
         previous[next] = node;
-        push(next, candidate);
+        pushByDistance(queue, next, candidate);
       }
     }
   }
@@ -96,26 +96,17 @@ function pathsFrom(graph, start) {
 
 function distanceScale(event) {
   const scale = event.map?.metresPerUnit;
-  return Number.isFinite(scale) && scale > 0 ? scale : Array.isArray(event.map?.walkways) ? 1 : 0.5;
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
 }
 
 function isCalibrated(event) {
-  return !Array.isArray(event.map?.walkways) || (Number.isFinite(event.map?.metresPerUnit) && event.map.metresPerUnit > 0);
+  return Number.isFinite(event.map?.metresPerUnit) && event.map.metresPerUnit > 0;
 }
 
 function createGraph(event) {
   if (graphCache.has(event)) return graphCache.get(event);
-  const segments = [];
-  const explicitWalkways = event.map?.walkways;
-  if (explicitWalkways !== undefined) {
-    if (!Array.isArray(explicitWalkways)) throw new TypeError('전시장 통로는 선분 배열이어야 합니다.');
-    segments.push(...explicitWalkways);
-  } else {
-    const xs = event.map?.verticalAisles || DEFAULT_AISLES_X;
-    const ys = event.map?.horizontalAisles || DEFAULT_AISLES_Y;
-    ys.forEach((y) => segments.push([{ x: xs[0], y }, { x: xs.at(-1), y }]));
-    xs.forEach((x) => segments.push([{ x, y: ys[0] }, { x, y: ys.at(-1) }]));
-  }
+  if (!Array.isArray(event.map?.walkways)) throw new TypeError('전시장 통로는 선분 배열이어야 합니다.');
+  const segments = [...event.map.walkways];
   for (const entrance of event.entrances || []) {
     if (validPoint(entrance.point) && validPoint(entrance.access)) {
       segments.push([entrance.point, entrance.access]);
@@ -170,9 +161,8 @@ function simplifyPoints(points) {
 
 /**
  * Find a shortest accessible path between two points on the aisle graph.
- * event.map.walkways may supply explicit axis-aligned [point, point] segments;
+ * event.map.walkways supplies explicit axis-aligned [point, point] segments;
  * crossings, T-junctions, shared endpoints and partial overlaps are connected.
- * When omitted, the horizontalAisles/verticalAisles grid remains the fallback.
  * Returns { points: {x,y}[], distance: number }. Distance is in metres when
  * metresPerUnit is known; uncalibrated explicit maps retain coordinate units.
  * Off-walkway or non-finite points throw instead of drawing through booths.
@@ -202,7 +192,12 @@ export function shortestPath(event, fromPoint, toPoint) {
   return { points: simplifyPoints(routePoints), distance: distances[end] * distanceScale(event) };
 }
 
-function realMapRecommendations(event, { count, categories, priority, excludeIds, startEntranceId, startBoothId }) {
+/**
+ * Select reachable booths by aisle proximity, area diversity and supplied
+ * highlights. Empty category choices mean all categories. Exclusions also
+ * prevent recommending another slot occupied by the same exhibitor.
+ */
+export function recommendBooths(event, { count = 6, categories = [], priority = 'balanced', excludeIds = [], startEntranceId = 'south', startBoothId = null } = {}) {
   const graph = createGraph(event);
   const startBooth = event.booths.find((booth) => booth.id === startBoothId);
   const startPoint = startBooth?.access || event.entrances?.find((entrance) => entrance.id === startEntranceId)?.point || event.entrances?.[0]?.point;
@@ -213,10 +208,17 @@ function realMapRecommendations(event, { count, categories, priority, excludeIds
   const { distances } = pathsFrom(graph, graph.indices.get(pointKey(startPoint)));
   const categorySet = new Set(Array.isArray(categories) ? categories : []);
   const excludeSet = new Set(Array.isArray(excludeIds) ? excludeIds : []);
-  const highlighted = (booth) => booth.featured === true || [booth.popularity, booth.novelty]
-    .some((score) => typeof score === 'number' && Number.isFinite(score) && score > 0);
+  const highlighted = (booth) => {
+    if (booth.featured === true) return true;
+    return [booth.popularity, booth.novelty].some((score) =>
+      typeof score === 'number' && Number.isFinite(score) && score > 0);
+  };
   const candidates = event.booths
-    .filter((booth) => validPoint(booth.access) && booth.id !== startBooth?.id && !excludeSet.has(booth.id) && (!categorySet.size || categorySet.has(booth.category)))
+    .filter((booth) => {
+      if (!validPoint(booth.access)) return false;
+      if (booth.id === startBooth?.id || excludeSet.has(booth.id)) return false;
+      return !categorySet.size || categorySet.has(booth.category);
+    })
     .map((booth) => ({
       booth,
       distance: distances[graph.indices.get(pointKey(booth.access))],
@@ -234,21 +236,31 @@ function realMapRecommendations(event, { count, categories, priority, excludeIds
   }
   const target = Math.min(candidates.length, Math.max(0, Math.floor(Number(count) || 0)));
   const score = (candidate) => {
-    if (priority === 'nearby') return candidate.distance / maxDistance;
-    if (priority === 'featured') return (candidate.featured ? 0 : 2) + candidate.distance / maxDistance;
-    return candidate.distance / maxDistance + (areaCounts.get(candidate.area) || 0) * 0.65;
+    const distanceScore = candidate.distance / maxDistance;
+    if (priority === 'nearby') return distanceScore;
+    if (priority === 'featured') {
+      const highlightPenalty = candidate.featured ? 0 : 2;
+      return highlightPenalty + distanceScore;
+    }
+    const areaPenalty = (areaCounts.get(candidate.area) || 0) * 0.65;
+    return distanceScore + areaPenalty;
+  };
+  const isBetterCandidate = (candidate, current) => {
+    const difference = score(candidate) - score(current);
+    if (difference < -EPSILON) return true;
+    if (!(Math.abs(difference) < EPSILON)) return false;
+
+    // Close scores prefer a supplied highlight, then distance, then booth code.
+    if (candidate.featured !== current.featured) return candidate.featured;
+    if (candidate.distance !== current.distance) return candidate.distance < current.distance;
+    const candidateCode = String(candidate.booth.code ?? candidate.booth.id);
+    const currentCode = String(current.booth.code ?? current.booth.id);
+    return candidateCode.localeCompare(currentCode) < 0;
   };
   while (selected.length < target && candidates.length) {
     let best = 0;
     for (let index = 1; index < candidates.length; index++) {
-      const difference = score(candidates[index]) - score(candidates[best]);
-      if (difference < -EPSILON || (Math.abs(difference) < EPSILON && (
-        (candidates[index].featured && !candidates[best].featured) ||
-        (candidates[index].featured === candidates[best].featured && (
-          candidates[index].distance < candidates[best].distance ||
-          (candidates[index].distance === candidates[best].distance && String(candidates[index].booth.code ?? candidates[index].booth.id).localeCompare(String(candidates[best].booth.code ?? candidates[best].booth.id)) < 0)
-        ))
-      ))) best = index;
+      if (isBetterCandidate(candidates[index], candidates[best])) best = index;
     }
     const [candidate] = candidates.splice(best, 1);
     const group = groupKey(candidate.booth);
@@ -260,116 +272,68 @@ function realMapRecommendations(event, { count, categories, priority, excludeIds
   return selected;
 }
 
-/**
- * Select unique sample booths by popularity / novelty, respecting categories and
- * exclusions. A small diversity bonus spreads balanced picks across categories.
- * Missing category choices means all categories. The sample scores are editorial.
- * Explicit real maps use aisle proximity and area diversity, never fake scores:
- * nearby ranks from the chosen start; featured prioritizes supplied highlights.
- * Real booth.area (then zone/category) supplies the balanced diversity grouping.
- */
-export function recommendBooths(event, { count = 6, categories = [], priority = 'balanced', excludeIds = [], startEntranceId = 'south', startBoothId = null } = {}) {
-  if (Array.isArray(event.map?.walkways)) {
-    return realMapRecommendations(event, {count, categories, priority, excludeIds, startEntranceId, startBoothId});
+// The start is stop 0. Booths use the same numbers throughout planning.
+const START = 0;
+
+function routeCost(order, distance, returnToEntrance) {
+  let cost = 0;
+  let from = START;
+  for (const to of order) {
+    cost += distance(from, to);
+    from = to;
   }
-  const target = Math.min(event.booths.length, Math.max(0, Math.floor(Number(count) || 0)));
-  const categorySet = new Set(Array.isArray(categories) ? categories : []);
-  const excludeSet = new Set(Array.isArray(excludeIds) ? excludeIds : []);
-  const remaining = event.booths.filter((booth) => !excludeSet.has(booth.id) && (!categorySet.size || categorySet.has(booth.category)));
-  const selected = [];
-  const categoryCounts = new Map();
-  const score = (booth) => {
-    if (priority === 'popular') return booth.popularity;
-    if (priority === 'unique') return booth.novelty;
-    return booth.popularity * 0.55 + booth.novelty * 0.45 - (categoryCounts.get(booth.category) || 0) * 7;
-  };
-  while (selected.length < target && remaining.length) {
-    remaining.sort((a, b) => score(b) - score(a) || a.code.localeCompare(b.code));
-    const booth = remaining.shift();
-    selected.push(booth);
-    categoryCounts.set(booth.category, (categoryCounts.get(booth.category) || 0) + 1);
-  }
-  return selected;
+  if (returnToEntrance && order.length) cost += distance(from, START);
+  return cost;
 }
 
-const routeCost = (order, matrix, returnToEntrance) => {
-  if (!order.length) return 0;
-  let total = matrix[0][order[0] + 1];
-  for (let index = 1; index < order.length; index++) total += matrix[order[index - 1] + 1][order[index] + 1];
-  if (returnToEntrance) total += matrix[order.at(-1) + 1][0];
-  return total;
-};
-
-function exactOrder(count, matrix, returnToEntrance) {
-  const size = 1 << count;
-  const costs = Array.from({ length: size }, () => new Float64Array(count).fill(Infinity));
-  const previous = Array.from({ length: size }, () => new Int16Array(count).fill(-1));
-  for (let index = 0; index < count; index++) costs[1 << index][index] = matrix[0][index + 1];
-  for (let mask = 1; mask < size; mask++) {
-    for (let last = 0; last < count; last++) {
-      if (!(mask & (1 << last))) continue;
-      const previousMask = mask ^ (1 << last);
-      if (!previousMask) continue;
-      for (let earlier = 0; earlier < count; earlier++) {
-        if (!(previousMask & (1 << earlier))) continue;
-        const candidate = costs[previousMask][earlier] + matrix[earlier + 1][last + 1];
-        if (candidate < costs[mask][last] - EPSILON) {
-          costs[mask][last] = candidate;
-          previous[mask][last] = earlier;
-        }
+function nearestNeighborOrder(stops, first, distance) {
+  const order = [first];
+  const unvisited = stops.filter((stop) => stop !== first);
+  while (unvisited.length) {
+    const current = order.at(-1);
+    let closestIndex = 0;
+    for (let index = 1; index < unvisited.length; index++) {
+      if (distance(current, unvisited[index]) < distance(current, unvisited[closestIndex])) {
+        closestIndex = index;
       }
     }
-  }
-  let last = 0;
-  const fullMask = size - 1;
-  for (let index = 1; index < count; index++) {
-    if (costs[fullMask][index] + (returnToEntrance ? matrix[index + 1][0] : 0) <
-        costs[fullMask][last] + (returnToEntrance ? matrix[last + 1][0] : 0) - EPSILON) last = index;
-  }
-  const order = [];
-  let mask = fullMask;
-  while (last !== -1) {
-    order.unshift(last);
-    const next = previous[mask][last];
-    mask ^= 1 << last;
-    last = next;
+    const [closest] = unvisited.splice(closestIndex, 1);
+    order.push(closest);
   }
   return order;
 }
 
-function heuristicOrder(count, matrix, returnToEntrance) {
-  // Try every first stop, then improve each candidate with 2-opt.
-  let best = Array.from({ length: count }, (_, index) => index);
-  let bestCost = routeCost(best, matrix, returnToEntrance);
-  for (let first = 0; first < count; first++) {
-    let order = [first];
-    const available = new Set(Array.from({ length: count }, (_, index) => index).filter((index) => index !== first));
-    while (available.size) {
-      let next = available.values().next().value;
-      for (const index of available) if (matrix[order.at(-1) + 1][index + 1] < matrix[order.at(-1) + 1][next + 1]) next = index;
-      order.push(next);
-      available.delete(next);
-    }
-    let cost = routeCost(order, matrix, returnToEntrance);
-    let improving = true;
-    while (improving) {
-      improving = false;
-      for (let i = 0; i < count - 1; i++) {
-        for (let j = i + 1; j < count; j++) {
-          const left = i ? order[i - 1] + 1 : 0;
-          const first = order[i] + 1;
-          const last = order[j] + 1;
-          const right = j + 1 < count ? order[j + 1] + 1 : returnToEntrance ? 0 : null;
-          const delta = matrix[left][last] - matrix[left][first] +
-            (right === null ? 0 : matrix[first][right] - matrix[last][right]);
-          if (delta < -EPSILON) {
-            order = [...order.slice(0, i), ...order.slice(i, j + 1).reverse(), ...order.slice(j + 1)];
-            cost += delta;
-            improving = true;
-          }
-        }
+function improveWithTwoOpt(order, distance, returnToEntrance) {
+  let cost = routeCost(order, distance, returnToEntrance);
+  let improved;
+  do {
+    improved = false;
+    for (let left = 0; left < order.length - 1; left++) {
+      for (let right = left + 1; right < order.length; right++) {
+        const before = order[left - 1] ?? START;
+        const after = order[right + 1] ?? (returnToEntrance ? START : null);
+        const first = order[left];
+        const last = order[right];
+        // A reversal changes only the links at its two ends on this symmetric map.
+        let change = distance(before, last) - distance(before, first);
+        if (after !== null) change += distance(first, after) - distance(last, after);
+        if (change >= -EPSILON) continue;
+        const reversed = order.slice(left, right + 1).reverse();
+        order.splice(left, reversed.length, ...reversed);
+        cost += change;
+        improved = true;
       }
     }
+  } while (improved);
+  return { order, cost };
+}
+
+function heuristicOrder(stops, distance, returnToEntrance) {
+  let best = stops;
+  let bestCost = routeCost(best, distance, returnToEntrance);
+  for (const first of stops) {
+    const greedy = nearestNeighborOrder(stops, first, distance);
+    const { order, cost } = improveWithTwoOpt(greedy, distance, returnToEntrance);
     if (cost < bestCost - EPSILON) {
       best = order;
       bestCost = cost;
@@ -378,9 +342,22 @@ function heuristicOrder(count, matrix, returnToEntrance) {
   return best;
 }
 
+function buildLegs(event, locations) {
+  const legs = locations.map(() => []);
+  for (let from = 0; from < locations.length; from++) {
+    for (let to = from + 1; to < locations.length; to++) {
+      const leg = shortestPath(event, locations[from].point, locations[to].point);
+      legs[from][to] = leg;
+      legs[to][from] = { distance: leg.distance, points: [...leg.points].reverse() };
+    }
+  }
+  return legs;
+}
+
 /**
- * Plan a walking itinerary. Up to 10 stops use exact dynamic programming;
- * larger selections use multi-start nearest-neighbour and 2-opt improvement.
+ * Plan a walking itinerary using multi-start nearest-neighbour and 2-opt
+ * improvement. The original order remains a candidate, so the result is no
+ * longer than that baseline; a globally optimal visit order is not guaranteed.
  * completedIds are removed. Unknown booth IDs are ignored, duplicates removed.
  * A valid startBoothId starts at that booth's aisle access point and excludes
  * that booth from targets. returnToEntrance then returns to this starting booth.
@@ -403,43 +380,36 @@ export function planRoute(event, { boothIds = [], startEntranceId = 'south', sta
   const completedSet = new Set(Array.isArray(completedIds) ? completedIds : []);
   const requestedIds = [...new Set(Array.isArray(boothIds) ? boothIds : [])].filter((id) => !completedSet.has(id) && id !== startBooth?.id);
   const selected = requestedIds.map((id) => boothsById.get(id)).filter(Boolean);
-  const points = [startEntrance.point, ...selected.map((booth) => booth.access)];
-  const matrix = points.map(() => points.map(() => 0));
-  const paths = new Map();
-  for (let i = 0; i < points.length; i++) {
-    for (let j = i + 1; j < points.length; j++) {
-      const path = shortestPath(event, points[i], points[j]);
-      matrix[i][j] = matrix[j][i] = path.distance;
-      paths.set(`${i}-${j}`, path.points);
-      paths.set(`${j}-${i}`, [...path.points].reverse());
-    }
-  }
-  const count = selected.length;
-  const inputOrder = selected.map((_, index) => index);
-  const order = count <= 1 ? inputOrder : count <= 10 ? exactOrder(count, matrix, returnToEntrance) : heuristicOrder(count, matrix, returnToEntrance);
-  const stops = order.map((index) => selected[index]);
-  const indices = [0, ...order.map((index) => index + 1)];
-  if (returnToEntrance && stops.length) indices.push(0);
+  const locations = [startEntrance, ...selected.map(({ id, access }) => ({ id, point: access }))];
+  const legs = buildLegs(event, locations);
+  const distance = (from, to) => legs[from][to].distance;
+  const inputOrder = selected.map((_, index) => index + 1);
+  const order = selected.length > 1
+    ? heuristicOrder(inputOrder, distance, returnToEntrance)
+    : inputOrder;
+  const stops = order.map((stop) => selected[stop - 1]);
+  const itinerary = [START, ...order];
+  if (returnToEntrance && stops.length) itinerary.push(START);
   const segments = [];
   const routePoints = [];
-  for (let index = 1; index < indices.length; index++) {
-    const fromIndex = indices[index - 1];
-    const toIndex = indices[index];
-    const segmentPoints = paths.get(`${fromIndex}-${toIndex}`) || [{ ...points[fromIndex] }];
+  for (let index = 1; index < itinerary.length; index++) {
+    const from = itinerary[index - 1];
+    const to = itinerary[index];
+    const leg = legs[from][to];
     segments.push({
-      from: { ...points[fromIndex] },
-      to: { ...points[toIndex] },
-      fromId: fromIndex ? selected[fromIndex - 1].id : startEntrance.id,
-      toId: toIndex ? selected[toIndex - 1].id : startEntrance.id,
-      points: segmentPoints.map((point) => ({ ...point })),
-      distance: matrix[fromIndex][toIndex],
+      from: { ...locations[from].point },
+      to: { ...locations[to].point },
+      fromId: locations[from].id,
+      toId: locations[to].id,
+      points: leg.points.map((point) => ({ ...point })),
+      distance: leg.distance,
     });
-    for (const point of segmentPoints) {
+    for (const point of leg.points) {
       if (!routePoints.length || !samePoint(routePoints.at(-1), point)) routePoints.push({ ...point });
     }
   }
-  const totalDistance = routeCost(order, matrix, returnToEntrance);
-  const baselineDistance = routeCost(inputOrder, matrix, returnToEntrance);
+  const totalDistance = routeCost(order, distance, returnToEntrance);
+  const baselineDistance = routeCost(inputOrder, distance, returnToEntrance);
   const walkingMinutes = isCalibrated(event) ? (totalDistance ? Math.max(1, Math.ceil(totalDistance / 70)) : 0) : null;
   return {
     stops,

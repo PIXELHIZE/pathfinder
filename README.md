@@ -1,21 +1,32 @@
-# 부스패스
+# Pathfinder · 부스패스
 
-공식 전시장 자료를 바탕으로 부스 검색, 추천, 방문 순서 계산을 제공하는 정적 웹입니다.
+공식 전시장 배치도에서 방문할 부스를 고르고, 통로를 따라 이동하는 순서를 계획하는 React 웹입니다.
+
+## 실행
+
+Node.js 20 LTS의 20.19 이상 또는 Node.js 22.12 이상에서 프로젝트 루트를 엽니다.
 
 ```sh
-npm run dev   # http://127.0.0.1:4173
-npm test
-npm run build
+npm ci
+npm run dev
 ```
 
-| 행사 | 지원 범위 | 자료 |
+터미널에 표시된 주소로 접속합니다. `npm run build`로 만든 정적 웹은 `dist/`에 저장되고, `npm run preview`로 확인할 수 있습니다.
+
+## 구성
+
+- `src/home`에서 동선을 만들 수 있는 행사 목록을 표시합니다.
+- `src/planner`에서 부스 선택, 관람 순서, 통로 지도와 동선 계산을 처리합니다.
+- `src/data/exhibitions`에 두는 행사별 JSON은 자동으로 찾아 별도 자산으로 배포합니다. 표시 순서는 각 JSON의 `order` 값으로 정합니다. 이전 행사 링크의 별칭은 `src/data/config.json`에 있습니다.
+- `src/assets`에는 로고와 아이콘이 있습니다. Vite가 빌드에서 사용할 자산 경로를 생성합니다.
+
+## 수록 행사
+
+| 행사 | 동선에 추가할 수 있는 범위 | 출처 |
 |---|---|---|
-| 코믹월드 339 일산 (2026.11.7–8) | 공식 지도 좌측 창작·전문·밀리터리 구역. 토 564자리, 일 560자리 | [배치도와 날짜별 부스 목록](https://comicw.net/map/339/) |
-| 일러스타 페스 14 (2026.10.10–11) | 킨텍스 4·5홀 인디게임 구역 20곳 | [배치 안내](https://illustar.net/notice/qvnq9Gn7), [부스 목록](https://docs.google.com/spreadsheets/d/1pGgLmH-AYn6rwHtW-GUtykbjV7OF37eoSTLlRpkPzos/edit?usp=sharing) |
-| 서울카페쇼 2026 (2026.11.11–14) | 코엑스 A–D홀 내부 552곳. 로비, 무대, 홀 간 이동 제외 | [배치도](https://floorplan.exporum.com/embed/cafeshow/), [참가업체](https://kor.cafeshow.com/kor/cafeshow/exhibitor_list.asp), [체리스초이스](https://kor.cafeshow.com/kor/mypage/my_notice_list.asp?page=1) |
+| 코믹월드 WINTER 2026 · 340회 (2026.12.12–13) | 공식 0.7 배치도 2–5홀. 청년·전문 부스 토 2,245자리, 일 2,253자리 | [배치도와 요일별 명단](https://comicw.net/map/340/), [관람 안내](https://m.comicw.net/b/) |
+| 코믹월드 339 일산 (2026.11.7–8) | 1·2홀 중 창작·전문·밀리터리 부스 토 564자리, 일 560자리 | [배치도와 요일별 명단](https://comicw.net/map/339/), [기업·밀덕 테마존 명단](https://m.comicw.net/free/9486?ft=all) |
+| 일러스타 페스 14 (2026.10.10–11) | 킨텍스 4·5홀 서클·기업·인디게임 토 781자리, 일 775자리 | [배치 안내](https://illustar.net/notice/qvnq9Gn7), [부스 목록](https://docs.google.com/spreadsheets/d/1pGgLmH-AYn6rwHtW-GUtykbjV7OF37eoSTLlRpkPzos/edit?usp=sharing) |
+| 서울카페쇼 2026 (2026.11.11–14) | 코엑스 A–D홀, 1·3층 로비와 A–B·C–D 연결 구역 612곳. 무대 3곳은 지도에 표시 | [공식 평면도](https://floorplan.exporum.com/embed/cafeshow/), [참가업체](https://kor.cafeshow.com/kor/cafeshow/exhibitor_list.asp), [참관 안내](https://kor.cafeshow.com/kor/visitor/visitor_see.asp) |
 
-지도는 부스 좌표로 재구성했습니다. 코믹월드와 일러스타 페스 통로는 공식 배치도에서 수동으로 옮겼고, 카페쇼는 공식 지도에서 공개하는 통로 좌표를 사용합니다. 물리 거리 배율이 확인되지 않은 지도에서는 도면상의 거리로 방문 순서를 비교합니다.
-
-`engine.js`는 다익스트라로 각 출발점과 방문지 간 통로 최단 거리를 계산합니다. 방문지가 10개 이하면 부분집합 동적 계획법으로 최소 이동 순서를 구합니다. 11개부터 40개까지는 첫 방문지를 바꿔가며 가까운 부스를 잇고 2-opt로 순서를 개선합니다. 추천은 가까운 부스, 분야 다양성, 확인된 주최 측 선정 정보에 근거합니다.
-
-행사별 날짜·부스·통로 스냅샷은 `comicworld.js`, `illustar.js`, `cafe2026.js`에 있습니다. `exhibitions.js`에서 출시할 회차와 홀을 선택합니다. 카페쇼 데이터 수집은 `scripts/import-cafe2026.py`로 재현할 수 있습니다. 예제 데이터 `data.js`는 엔진 테스트에서만 사용합니다.
+코믹월드·일러스타 페스 지도는 공식 도면에서 부스와 통로를 재구성했습니다. 개별 위치가 공개되지 않은 참가팀과 일페 디저트 판매점은 검색 가능한 명단으로 표시합니다. 서울카페쇼는 공식 지도에 연결이 있는 같은 층 구역 안에서 경로를 계산합니다. 물리 거리 배율을 확인할 수 없는 지도는 도면 좌표 단위로 방문 순서를 비교합니다.
