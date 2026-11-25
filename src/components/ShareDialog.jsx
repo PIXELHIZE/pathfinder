@@ -5,7 +5,7 @@ export function ShareDialog({ url, onClose, notice }) {
   const field = useRef(null);
 
   useEffect(() => {
-    if (!dialog.current.open) dialog.current.showModal();
+    dialog.current.showModal();
   }, []);
 
   async function copyLink() {

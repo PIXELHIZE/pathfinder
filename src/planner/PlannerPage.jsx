@@ -3,24 +3,41 @@ import { VenueMap } from './VenueMap.jsx';
 import { maxStops } from './session.js';
 
 const format = new Intl.NumberFormat('ko-KR');
-const normalize = value => String(value ?? '').toLocaleLowerCase().replace(/[\s_-]+/g, '');
+
+function normalizeSearchText(value) {
+  return String(value ?? '').toLocaleLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function matchesSearch(searchText, values) {
+  if (!searchText) return true;
+  for (const value of values) {
+    if (normalizeSearchText(value).includes(searchText)) return true;
+  }
+  return false;
+}
 
 function ManualPicker({ event, plan, planner, actions }) {
   const [unmappedOpen, setUnmappedOpen] = useState(false);
-  const selected = new Set(plan.selected);
-  const query = normalize(planner.search);
-  const matches = values => !query || values.some(value => normalize(value).includes(query));
-  const booths = event.booths.filter(booth => (
-    (!planner.onlySelected || selected.has(booth.id))
-    && matches([booth.code, booth.name, booth.category, ...(booth.tags ?? [])])
-  ));
-  const unmapped = planner.onlySelected ? [] : (event.unmappedBooths ?? []).filter(booth =>
-    matches([booth.code, booth.name, booth.zone]));
-  const showUnmappedMatch = Boolean(query && unmapped.length && !booths.length);
+  const selectedBoothIds = new Set(plan.selected);
+  const searchText = normalizeSearchText(planner.search);
+  const matchingBooths = [];
+  const unmappedMatches = [];
+
+  for (const booth of event.booths) {
+    if (planner.onlySelected && !selectedBoothIds.has(booth.id)) continue;
+    const searchableValues = [booth.code, booth.name, booth.category, ...(booth.tags ?? [])];
+    if (matchesSearch(searchText, searchableValues)) matchingBooths.push(booth);
+  }
+  if (!planner.onlySelected) {
+    for (const booth of event.unmappedBooths ?? []) {
+      if (matchesSearch(searchText, [booth.code, booth.name, booth.zone])) unmappedMatches.push(booth);
+    }
+  }
+  const onlyUnmappedResults = searchText !== '' && unmappedMatches.length > 0 && matchingBooths.length === 0;
 
   useEffect(() => {
-    if (showUnmappedMatch) setUnmappedOpen(true);
-  }, [query, showUnmappedMatch]);
+    if (onlyUnmappedResults) setUnmappedOpen(true);
+  }, [searchText, onlyUnmappedResults]);
 
   return (
     <>
@@ -34,21 +51,27 @@ function ManualPicker({ event, plan, planner, actions }) {
         </label>
       </div>
       <div className="booth-list" aria-label="부스 목록">
-        {booths.map(booth => (
-          <label className={selected.has(booth.id) ? 'booth-row selected' : 'booth-row'} key={booth.id}>
-            <input type="checkbox" checked={selected.has(booth.id)} disabled={booth.id === plan.start}
-              onChange={() => actions.toggleBooth(booth.id)} />
-            <span>{booth.name}<small>{[booth.code, booth.category, booth.id === plan.start ? '출발점' : booth.highlight].filter(Boolean).join(' · ')}</small></span>
-          </label>
-        ))}
-        {!booths.length && <p className="results">동선에 추가할 수 있는 부스가 없습니다.</p>}
+        {matchingBooths.map(booth => {
+          const isSelected = selectedBoothIds.has(booth.id);
+          const isStart = booth.id === plan.start;
+          const boothStatus = isStart ? '출발점' : booth.highlight;
+          const boothDetails = [booth.code, booth.category, boothStatus].filter(Boolean).join(' · ');
+          return (
+            <label className={isSelected ? 'booth-row selected' : 'booth-row'} key={booth.id}>
+              <input type="checkbox" checked={isSelected} disabled={isStart}
+                onChange={() => actions.toggleBooth(booth.id)} />
+              <span>{booth.name}<small>{boothDetails}</small></span>
+            </label>
+          );
+        })}
+        {matchingBooths.length === 0 && <p className="results">동선에 추가할 수 있는 부스가 없습니다.</p>}
       </div>
-      {unmapped.length > 0 && (
+      {unmappedMatches.length > 0 && (
         <details className="unmapped-booths" open={unmappedOpen} onToggle={toggle => setUnmappedOpen(toggle.currentTarget.open)}>
-          <summary>위치 미공개 명단 · {format.format(unmapped.length)}곳</summary>
+          <summary>위치 미공개 명단 · {format.format(unmappedMatches.length)}곳</summary>
           <ul>
-            {unmapped.map((booth, index) => (
-              <li key={(booth.code || booth.name) + '-' + index}>
+            {unmappedMatches.map((booth, index) => (
+              <li key={`${booth.code || booth.name}-${index}`}>
                 <strong>{booth.name}</strong><small>{[booth.code, booth.zone].filter(Boolean).join(' · ')}</small>
               </li>
             ))}
@@ -56,20 +79,27 @@ function ManualPicker({ event, plan, planner, actions }) {
         </details>
       )}
       <div className="selection">
-        <span aria-live="polite">{selected.size}곳 선택</span>
-        <button className="primary" type="button" disabled={!selected.size} onClick={actions.makePlan}>동선 만들기</button>
+        <span aria-live="polite">{selectedBoothIds.size}곳 선택</span>
+        <button className="primary" type="button" disabled={selectedBoothIds.size === 0} onClick={actions.makePlan}>동선 만들기</button>
       </div>
     </>
   );
 }
 
 function RecommendationForm({ event, planner, actions }) {
-  const hasHighlights = event.booths.some(booth => booth.featured || booth.novelty > 0 || booth.popularity > 0);
+  const hasHighlights = event.booths.some(booth => booth.featured);
+  const visitLimit = Math.min(maxStops, event.booths.length);
+
+  function submitRecommendations(submitEvent) {
+    submitEvent.preventDefault();
+    actions.recommend();
+  }
+
   return (
-    <form className="recommend-form" onSubmit={submit => { submit.preventDefault(); actions.recommend(); }}>
+    <form className="recommend-form" onSubmit={submitRecommendations}>
       <div className="recommend-fields">
         <label>방문할 개수
-          <input type="number" inputMode="numeric" min={1} max={Math.min(maxStops, event.booths.length)}
+          <input type="number" inputMode="numeric" min={1} max={visitLimit}
             value={planner.count} required onChange={change => actions.setPlanner('count', change.target.value)} />
         </label>
         <label>추천 기준
@@ -92,19 +122,26 @@ function RecommendationForm({ event, planner, actions }) {
 }
 
 export function PlannerPage({ exhibitions, event, plan, route, planner, actions, headingRef }) {
-  const manual = planner.mode === 'manual';
-  const details = [event.date, event.venue, event.venue?.endsWith(event.hall) ? null : event.hall].filter(Boolean).join(' · ');
+  const isManualMode = planner.mode === 'manual';
+  const eventDetails = [event.date, event.venue];
+  if (!event.venue.endsWith(event.hall)) eventDetails.push(event.hall);
+  const description = eventDetails.filter(Boolean).join(' · ');
   const schedule = event.schedule ?? [];
-  const hours = schedule.map(({ date, label, opens, closes, lastEntry }) => {
-    const day = schedule.length > 1 ? `${Number(date.slice(5, 7))}월 ${Number(date.slice(8))}일 ` : '';
-    return `${day}${label} ${opens}–${closes}${lastEntry ? ` (입장 마감 ${lastEntry})` : ''}`;
-  }).join(' · ');
+  const dailyHours = [];
+  for (const day of schedule) {
+    let text = '';
+    if (schedule.length > 1) text = `${Number(day.date.slice(5, 7))}월 ${Number(day.date.slice(8))}일 `;
+    text += `${day.label} ${day.opens}–${day.closes}`;
+    if (day.lastEntry) text += ` (입장 마감 ${day.lastEntry})`;
+    dailyHours.push(text);
+  }
+  const hours = dailyHours.join(' · ');
 
   return (
     <section aria-labelledby="plan-title">
       <header className="screen-header">
         <h1 id="plan-title" tabIndex={-1} ref={headingRef}>{event.name}</h1>
-        <p>{details}</p>
+        <p>{description}</p>
         {hours && <p>{hours}</p>}
         {event.site && <a className="event-address" href={event.site.directions} target="_blank" rel="noopener noreferrer">{event.site.address}</a>}
         {event.notice && <p>{event.notice}</p>}
@@ -134,15 +171,15 @@ export function PlannerPage({ exhibitions, event, plan, route, planner, actions,
         <section className="booth-panel panel" aria-labelledby="booth-title">
           <div className="section-heading">
             <h2 id="booth-title">부스 선택</h2>
-            {manual && plan.selected.length > 0 && (
+            {isManualMode && plan.selected.length > 0 && (
               <button className="text-button" type="button" onClick={actions.clearBooths}>선택 해제</button>
             )}
           </div>
           <div className="mode" role="group" aria-label="선택 방식">
-            <button type="button" aria-pressed={manual} onClick={() => actions.setPlanner('mode', 'manual')}>직접 고르기</button>
-            <button type="button" aria-pressed={!manual} onClick={() => actions.setPlanner('mode', 'recommend')}>추천받기</button>
+            <button type="button" aria-pressed={isManualMode} onClick={() => actions.setPlanner('mode', 'manual')}>직접 고르기</button>
+            <button type="button" aria-pressed={!isManualMode} onClick={() => actions.setPlanner('mode', 'recommend')}>추천받기</button>
           </div>
-          {manual
+          {isManualMode
             ? <ManualPicker key={event.id} event={event} plan={plan} planner={planner} actions={actions} />
             : <RecommendationForm event={event} planner={planner} actions={actions} />}
         </section>

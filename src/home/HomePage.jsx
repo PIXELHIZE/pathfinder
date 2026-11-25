@@ -3,7 +3,7 @@ import { followNavigation } from '../components/navigation.js';
 
 function EventRow({ family, records, actions, paths }) {
   const [selectedId, setSelectedId] = useState(records[0].id);
-  const selected = records.find((record) => record.id === selectedId) || records[0];
+  const selected = records.find(record => record.id === selectedId);
   const optionId = `catalogue-option-${family}`;
 
   return (
@@ -32,7 +32,6 @@ function EventRow({ family, records, actions, paths }) {
 export function HomePage({ exhibitions, resume, actions, paths, headingRef }) {
   const groups = new Map();
   for (const exhibition of exhibitions) {
-    if (!exhibition.booths?.length) continue;
     if (!groups.has(exhibition.family)) groups.set(exhibition.family, []);
     groups.get(exhibition.family).push(exhibition);
   }
@@ -48,9 +47,7 @@ export function HomePage({ exhibitions, resume, actions, paths, headingRef }) {
         </p>
       )}
       <ul className="event-list" aria-label="행사 목록">
-        {groups.size
-          ? [...groups].map(([family, records]) => <EventRow key={family} family={family} records={records} actions={actions} paths={paths} />)
-          : <li className="catalogue-empty">표시할 행사가 없습니다.</li>}
+        {[...groups].map(([family, records]) => <EventRow key={family} family={family} records={records} actions={actions} paths={paths} />)}
       </ul>
     </section>
   );

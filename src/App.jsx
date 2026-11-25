@@ -7,14 +7,20 @@ import { recommendBooths } from './planner/engine.js';
 import { PlannerPage } from './planner/PlannerPage.jsx';
 import { TourPage } from './planner/TourPage.jsx';
 import {
-  calculatePlan, findSavedEvent, getEvent, maxStops, openLocation, pageUrl, routingOptions,
+  calculatePlan, findSavedEvent, getEvent, maxStops, openLocation, pageUrl,
   screenTitles, shareUrl, storePlans, updateSessionPlan,
 } from './planner/session.js';
+
+function changeAddress(view, eventId) {
+  const url = pageUrl(view, eventId);
+  if (url.href !== window.location.href) window.history.pushState(null, '', url);
+  return url;
+}
 
 export function App({ exhibitions }) {
   const [session, setSession] = useState(() => openLocation(exhibitions, new URL(window.location.href)));
   const [share, setShare] = useState(null);
-  const [status, setStatus] = useState(() => ({ text: session.message ?? '' }));
+  const [notice, setNotice] = useState(session.message ?? '');
   const headingRef = useRef(null);
   const focusRequest = useRef(null);
   const { event, plan, route, planner, view, plans } = session;
@@ -26,15 +32,11 @@ export function App({ exhibitions }) {
     forEvent: (screen, id) => pageUrl(screen, id).href,
   };
 
-  function notice(text) {
-    setStatus({ text });
-  }
-
   useEffect(() => {
-    if (!status.text) return;
-    const timer = window.setTimeout(() => setStatus({ text: '' }), 3800);
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 3800);
     return () => window.clearTimeout(timer);
-  }, [status]);
+  }, [notice]);
 
   useEffect(() => {
     storePlans(plans);
@@ -58,10 +60,7 @@ export function App({ exhibitions }) {
   useEffect(() => {
     function onLocationChange() {
       const next = openLocation(exhibitions, new URL(window.location.href), session);
-      focusRequest.current = { scroll: next.view !== session.view };
-      if (next.message) setStatus({ text: next.message });
-      setShare(null);
-      setSession(next);
+      showPage(next, true);
     }
     function onHashChange() {
       if (window.location.hash.startsWith('#route=')) onLocationChange();
@@ -74,93 +73,96 @@ export function App({ exhibitions }) {
     };
   }, [exhibitions, session]);
 
-  function navigate(screen, id, { focus = true } = {}, current = session) {
-    const saved = screen === 'tour' ? findSavedEvent(exhibitions, current.plans, current.event.id) : undefined;
-    const targetId = id ?? saved ?? current.event.id;
-    const url = pageUrl(screen, targetId);
-    if (url.href !== window.location.href) window.history.pushState(null, '', url);
-    const next = openLocation(exhibitions, url, current);
-    if (focus) focusRequest.current = { scroll: next.view !== current.view };
-    if (next.message) notice(next.message);
+  function showPage(next, focus) {
+    if (focus) focusRequest.current = { scroll: next.view !== view };
+    if (next.message) setNotice(next.message);
     setShare(null);
     setSession(next);
   }
 
-  function setPlanner(field, value) {
-    setSession(current => ({ ...current, planner: { ...current.planner, [field]: value } }));
+  function navigate(screen, id, { focus = true } = {}) {
+    let targetId = id ?? event.id;
+    if (!id && screen === 'tour' && savedId) targetId = savedId;
+    const url = changeAddress(screen, targetId);
+    const next = openLocation(exhibitions, url, session);
+    showPage(next, focus);
   }
 
-  function savePlan(nextPlan, { recalculate = false, openTour = false, nextPlanner = planner } = {}) {
-    const result = recalculate ? calculatePlan(event, nextPlan) : { plan: nextPlan, route: null };
+  function setPlanner(field, value) {
+    setSession(current => {
+      const nextPlanner = { ...current.planner, [field]: value };
+      return { ...current, planner: nextPlanner };
+    });
+  }
+
+  function savePlan(nextPlan, { openTour = false, nextPlanner = planner } = {}) {
+    const result = nextPlan.planned ? calculatePlan(event, nextPlan) : { plan: nextPlan, route: null };
     const next = updateSessionPlan({ ...session, planner: nextPlanner }, result.plan, result.route);
-    if (result.message) notice(result.message);
-    if (openTour && result.route) navigate('tour', event.id, {}, next);
-    else setSession(next);
+    if (result.message) setNotice(result.message);
+    if (openTour && result.route) {
+      changeAddress('tour', event.id);
+      showPage({ ...next, view: 'tour', replaceUrl: null, message: undefined }, true);
+      return;
+    }
+    setSession(next);
   }
 
   function changeStart(id) {
     const selected = plan.selected.filter(boothId => boothId !== id);
     const completed = plan.completed.filter(boothId => boothId !== id);
-    const planned = plan.planned && selected.length > 0;
-    savePlan({ ...plan, start: id, selected, completed, planned }, { recalculate: planned });
+    savePlan({ ...plan, start: id, selected, completed });
   }
 
   function toggleBooth(id) {
-    if (id === plan.start || !event.booths.some(booth => booth.id === id)) return;
-    const selected = plan.selected.includes(id);
-    if (!selected && plan.selected.length >= maxStops) {
-      notice(`한 동선에 최대 ${maxStops}곳을 선택할 수 있습니다.`);
+    const alreadySelected = plan.selected.includes(id);
+    if (!alreadySelected && plan.selected.length >= maxStops) {
+      setNotice(`한 동선에 최대 ${maxStops}곳을 선택할 수 있습니다.`);
       return;
     }
-    savePlan({
-      ...plan,
-      selected: selected ? plan.selected.filter(boothId => boothId !== id) : [...plan.selected, id],
-      completed: plan.completed.filter(boothId => boothId !== id),
-      planned: false,
-    }, { nextPlanner: { ...planner, mode: 'manual' } });
+    const selected = plan.selected.filter(boothId => boothId !== id);
+    if (!alreadySelected) selected.push(id);
+    const completed = plan.completed.filter(boothId => boothId !== id);
+    const nextPlanner = { ...planner, mode: 'manual' };
+    savePlan({ ...plan, selected, completed, planned: false }, { nextPlanner });
+  }
+
+  function clearBooths() {
+    const nextPlan = { ...plan, selected: [], completed: [], planned: false };
+    const nextPlanner = { ...planner, onlySelected: false };
+    savePlan(nextPlan, { nextPlanner });
   }
 
   function recommend() {
     const count = Number(planner.count);
-    const limit = Math.min(maxStops, event.booths.length);
-    if (!Number.isInteger(count) || count < 1 || count > limit) return;
-    let picks;
-    try {
-      picks = recommendBooths(event, {
-        ...routingOptions(event, plan.start),
-        count,
-        categories: planner.interest ? [planner.interest] : [],
-        priority: planner.priority,
-        excludeIds: [plan.start, ...plan.completed],
-      });
-    } catch {
-      notice('부스를 추천하지 못했습니다. 출발점을 다시 골라주세요.');
-      return;
-    }
-    if (!picks.length) {
-      notice('조건에 맞고 통로로 갈 수 있는 부스가 없습니다.');
-      return;
-    }
-    savePlan({ ...plan, selected: picks.map(booth => booth.id), completed: [] }, {
-      recalculate: true,
-      openTour: true,
-      nextPlanner: { ...planner, search: '', onlySelected: true },
+    const picks = recommendBooths(event, {
+      startId: plan.start,
+      count,
+      categories: planner.interest ? [planner.interest] : [],
+      priority: planner.priority,
+      excludeIds: plan.completed,
     });
-    if (picks.length < count) notice(`조건에 맞는 부스 ${picks.length}곳을 골랐습니다.`);
+    if (!picks.length) {
+      setNotice('조건에 맞고 통로로 갈 수 있는 부스가 없습니다.');
+      return;
+    }
+    const selected = picks.map(booth => booth.id);
+    const nextPlan = { ...plan, selected, completed: [], planned: true };
+    const nextPlanner = { ...planner, search: '', onlySelected: true };
+    savePlan(nextPlan, { openTour: true, nextPlanner });
+    if (picks.length < count) setNotice(`조건에 맞는 부스 ${picks.length}곳을 골랐습니다.`);
   }
 
   function toggleComplete(id, checked) {
     const completed = checked
-      ? [...new Set([...plan.completed, id])]
+      ? [...plan.completed, id]
       : plan.completed.filter(boothId => boothId !== id);
     setSession(updateSessionPlan(session, { ...plan, completed }, route));
   }
 
   function replan() {
     const start = plan.completed.at(-1);
-    if (!start) return;
     const selected = plan.selected.filter(id => !plan.completed.includes(id));
-    savePlan({ ...plan, start, selected, completed: [] }, { recalculate: true });
+    savePlan({ ...plan, start, selected, completed: [] });
   }
 
   const actions = {
@@ -168,12 +170,10 @@ export function App({ exhibitions }) {
     openShare: () => setShare(shareUrl(session)),
     setPlanner,
     changeStart,
-    changeReturn: back => savePlan({ ...plan, back }, { recalculate: plan.planned }),
+    changeReturn: back => savePlan({ ...plan, back }),
     toggleBooth,
-    clearBooths: () => savePlan({ ...plan, selected: [], completed: [], planned: false }, {
-      nextPlanner: { ...planner, onlySelected: false },
-    }),
-    makePlan: () => savePlan(plan, { recalculate: true, openTour: true }),
+    clearBooths,
+    makePlan: () => savePlan({ ...plan, planned: true }, { openTour: true }),
     recommend,
     toggleComplete,
     replan,
@@ -190,8 +190,8 @@ export function App({ exhibitions }) {
         {view === 'tour' && <TourPage key={event.id} event={event} plan={plan} route={route} actions={actions}
           paths={paths} headingRef={headingRef} />}
       </main>
-      {share && <ShareDialog url={share} notice={notice} onClose={() => setShare(null)} />}
-      <div className="app-status" role="status">{status.text}</div>
+      {share && <ShareDialog url={share} notice={setNotice} onClose={() => setShare(null)} />}
+      <div className="app-status" role="status">{notice}</div>
     </>
   );
 }
