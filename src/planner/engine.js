@@ -1,8 +1,11 @@
 const EPSILON = 0.000001;
-const graphCache = new WeakMap();
 const MAX_CACHED_SOURCES = 64;
+const NON_FEATURED_PENALTY = 2;
+const REPEATED_AREA_PENALTY = 0.65;
+const graphCache = new WeakMap();
 
 const pointKey = (point) => `${point.x},${point.y}`;
+const placePoint = (place) => place.point ?? place.access;
 const almostEqual = (a, b) => Math.abs(a - b) < EPSILON;
 const samePoint = (a, b) => almostEqual(a.x, b.x) && almostEqual(a.y, b.y);
 const isBetween = (value, a, b) => value >= Math.min(a, b) - EPSILON && value <= Math.max(a, b) + EPSILON;
@@ -14,53 +17,33 @@ function pointOnSegment(point, a, b) {
 }
 
 export function startingPlace(event, startId) {
-  for (const entrance of event.entrances) {
-    if (entrance.id === startId) return entrance;
-  }
-  for (const booth of event.booths) {
-    if (booth.id === startId) return booth;
-  }
-  return event.entrances[0];
+  const matchesStart = place => place.id === startId;
+  return event.entrances.find(matchesStart) ?? event.booths.find(matchesStart) ?? event.entrances[0];
 }
 
 function connectWalkwayPoints(segments, basePoints) {
-  const uniquePoints = new Map();
-  for (const point of basePoints) uniquePoints.set(pointKey(point), point);
-  const points = Array.from(uniquePoints.values());
-  const indices = new Map();
-  const adjacency = [];
-  for (let index = 0; index < points.length; index++) {
-    indices.set(pointKey(points[index]), index);
-    adjacency.push(new Map());
-  }
-  for (const segment of segments) {
-    const start = segment[0];
-    const end = segment[1];
-    const pointsOnSegment = [];
-    for (const point of points) {
-      if (pointOnSegment(point, start, end)) pointsOnSegment.push(point);
-    }
-    pointsOnSegment.sort((first, second) => {
-      if (almostEqual(start.x, end.x)) return first.y - second.y;
-      return first.x - second.x;
-    });
-    for (let index = 1; index < pointsOnSegment.length; index++) {
-      const first = pointsOnSegment[index - 1];
-      const second = pointsOnSegment[index];
-      const firstNode = indices.get(pointKey(first));
-      const secondNode = indices.get(pointKey(second));
-      const length = Math.abs(first.x - second.x) + Math.abs(first.y - second.y);
-      adjacency[firstNode].set(secondNode, length);
-      adjacency[secondNode].set(firstNode, length);
+  const nodes = new Map();
+  for (const point of basePoints) nodes.set(pointKey(point), { point, links: new Map() });
+  const allNodes = [...nodes.values()];
+  for (const [index, node] of allNodes.entries()) node.index = index;
+  for (const [start, end] of segments) {
+    const onSegment = allNodes.filter(node => pointOnSegment(node.point, start, end));
+    const axis = almostEqual(start.x, end.x) ? 'y' : 'x';
+    onSegment.sort((first, second) => first.point[axis] - second.point[axis]);
+    for (let index = 1; index < onSegment.length; index++) {
+      const first = onSegment[index - 1];
+      const second = onSegment[index];
+      const length = Math.abs(first.point.x - second.point.x) + Math.abs(first.point.y - second.point.y);
+      first.links.set(second, length);
+      second.links.set(first, length);
     }
   }
-  return { points, indices, adjacency, sources: new Map() };
+  return { nodes, sources: new Map() };
 }
 
 function pushByDistance(queue, node, distance) {
   const entry = { node, distance };
   let index = queue.length;
-  queue.push(entry);
   while (index > 0) {
     const parent = Math.floor((index - 1) / 2);
     if (queue[parent].distance <= distance) break;
@@ -73,73 +56,77 @@ function pushByDistance(queue, node, distance) {
 function takeClosest(queue) {
   const first = queue[0];
   const last = queue.pop();
-  if (queue.length) {
-    let index = 0;
-    while (index * 2 + 1 < queue.length) {
-      let child = index * 2 + 1;
-      if (child + 1 < queue.length && queue[child + 1].distance < queue[child].distance) child++;
-      if (queue[child].distance >= last.distance) break;
-      queue[index] = queue[child];
-      index = child;
-    }
-    queue[index] = last;
+  if (!queue.length) return first;
+
+  let index = 0;
+  while (index * 2 + 1 < queue.length) {
+    let closestChild = index * 2 + 1;
+    const right = closestChild + 1;
+    if (right < queue.length && queue[right].distance < queue[closestChild].distance) closestChild = right;
+    if (queue[closestChild].distance >= last.distance) break;
+    queue[index] = queue[closestChild];
+    index = closestChild;
   }
+  queue[index] = last;
   return first;
 }
 
-function shortestPathsFrom(graph, start) {
-  const cached = graph.sources.get(start);
-  if (cached) {
-    graph.sources.delete(start);
-    graph.sources.set(start, cached);
-    return cached;
-  }
-  const distances = new Array(graph.points.length).fill(Infinity);
-  const previous = new Array(graph.points.length).fill(-1);
-  const queue = [];
-  distances[start] = 0;
-  pushByDistance(queue, start, 0);
+function findShortestPaths(graph, start) {
+  const distances = new Array(graph.nodes.size).fill(Infinity);
+  const previous = new Array(graph.nodes.size).fill(null);
+  const queue = [{ node: start, distance: 0 }];
+  distances[start.index] = 0;
+
   while (queue.length) {
     const { node, distance } = takeClosest(queue);
-    if (distance > distances[node] + EPSILON) continue;
-    for (const [next, length] of graph.adjacency[node]) {
+    if (distance > distances[node.index] + EPSILON) continue;
+    for (const [next, length] of node.links) {
       const candidate = distance + length;
-      if (candidate < distances[next] - EPSILON) {
-        distances[next] = candidate;
-        previous[next] = node;
+      if (candidate < distances[next.index] - EPSILON) {
+        distances[next.index] = candidate;
+        previous[next.index] = node;
         pushByDistance(queue, next, candidate);
       }
     }
   }
-  const result = { distances, previous };
-  graph.sources.set(start, result);
-  if (graph.sources.size > MAX_CACHED_SOURCES) {
-    const oldestStart = graph.sources.keys().next().value;
-    graph.sources.delete(oldestStart);
-  }
+  return { distances, previous };
+}
+
+function shortestPathsFrom(graph, start) {
+  const sources = graph.sources;
+  const result = sources.get(start) ?? findShortestPaths(graph, start);
+  sources.delete(start);
+  sources.set(start, result);
+  if (sources.size > MAX_CACHED_SOURCES) sources.delete(sources.keys().next().value);
   return result;
 }
 
-function getHallGraph(event) {
-  if (graphCache.has(event)) return graphCache.get(event);
-  const segments = event.map.walkways.slice();
-  for (const entrance of event.entrances) segments.push([entrance.point, entrance.access]);
-  const basePoints = [];
-  for (const segment of segments) basePoints.push(segment[0], segment[1]);
-  for (const booth of event.booths) basePoints.push(booth.access);
+function addCrossings(segments, points) {
   for (let i = 0; i < segments.length; i++) {
-    const [a, b] = segments[i];
+    const [firstStart, firstEnd] = segments[i];
+    const firstVertical = firstStart.x === firstEnd.x;
     for (let j = i + 1; j < segments.length; j++) {
-      const [c, d] = segments[j];
-      const firstVertical = a.x === b.x;
-      const secondVertical = c.x === d.x;
+      const [secondStart, secondEnd] = segments[j];
+      const secondVertical = secondStart.x === secondEnd.x;
       if (firstVertical === secondVertical) continue;
-      let crossing;
-      if (firstVertical) crossing = { x: a.x, y: c.y };
-      else crossing = { x: c.x, y: a.y };
-      if (pointOnSegment(crossing, a, b) && pointOnSegment(crossing, c, d)) basePoints.push(crossing);
+      const crossing = firstVertical
+        ? { x: firstStart.x, y: secondStart.y }
+        : { x: secondStart.x, y: firstStart.y };
+      const onFirst = pointOnSegment(crossing, firstStart, firstEnd);
+      if (onFirst && pointOnSegment(crossing, secondStart, secondEnd)) points.push(crossing);
     }
   }
+}
+
+function getHallGraph(event) {
+  const cached = graphCache.get(event);
+  if (cached) return cached;
+
+  const segments = event.map.walkways.slice();
+  for (const entrance of event.entrances) segments.push([entrance.point, entrance.access]);
+  const basePoints = segments.flatMap(([start, end]) => [start, end]);
+  for (const booth of event.booths) basePoints.push(booth.access);
+  addCrossings(segments, basePoints);
   const graph = connectWalkwayPoints(segments, basePoints);
   graphCache.set(event, graph);
   return graph;
@@ -148,10 +135,11 @@ function getHallGraph(event) {
 function simplifyPoints(points) {
   const result = [];
   for (const point of points) {
-    if (result.length && samePoint(result.at(-1), point)) continue;
+    const lastPoint = result.at(-1);
+    if (lastPoint && samePoint(lastPoint, point)) continue;
     while (result.length > 1) {
-      const secondLast = result[result.length - 2];
-      const last = result[result.length - 1];
+      const secondLast = result.at(-2);
+      const last = result.at(-1);
       const vertical = almostEqual(secondLast.x, last.x) && almostEqual(last.x, point.x);
       const horizontal = almostEqual(secondLast.y, last.y) && almostEqual(last.y, point.y);
       if (!vertical && !horizontal) break;
@@ -162,37 +150,45 @@ function simplifyPoints(points) {
   return result;
 }
 
-function shortestPath(graph, start, end, scale) {
-  const { points } = graph;
-  const startPoint = points[start];
-  if (samePoint(startPoint, points[end])) return { points: [{ x: startPoint.x, y: startPoint.y }], distance: 0 };
-  const { distances, previous } = shortestPathsFrom(graph, start);
-  if (distances[end] === Infinity) return null;
+function shortestPath(start, end, { distances, previous }, scale) {
+  const { x, y } = start.point;
+  if (samePoint(start.point, end.point)) return { points: [{ x, y }], distance: 0 };
+  if (distances[end.index] === Infinity) return null;
   const routePoints = [];
-  for (let index = end; index !== -1; index = previous[index]) routePoints.push(points[index]);
+  for (let node = end; node; node = previous[node.index]) routePoints.push(node.point);
   routePoints.reverse();
-  return { points: simplifyPoints(routePoints), distance: distances[end] * scale };
+  return { points: simplifyPoints(routePoints), distance: distances[end.index] * scale };
 }
 
-function exhibitorGroup(booth) {
-  return booth.originalBoothNumbers || booth.id;
+const exhibitorGroup = booth => booth.originalBoothNumbers || booth.id;
+
+function takeBest(items, isBetter) {
+  let best = 0;
+  for (let index = 1; index < items.length; index++) {
+    if (isBetter(items[index], items[best])) best = index;
+  }
+  return items.splice(best, 1)[0];
 }
 
 export function recommendBooths(event, { count, categories, priority, excludeIds, startId }) {
   const graph = getHallGraph(event);
   const start = startingPlace(event, startId);
-  const startPoint = start.point ?? start.access;
-  const { distances } = shortestPathsFrom(graph, graph.indices.get(pointKey(startPoint)));
+  const startNode = graph.nodes.get(pointKey(placePoint(start)));
+  const { distances } = shortestPathsFrom(graph, startNode);
   const categorySet = new Set(categories);
-  const excludeSet = new Set(excludeIds);
-  excludeSet.add(start.id);
+  const excluded = new Set(excludeIds).add(start.id);
+
   const candidates = [];
+  const chosenGroups = new Set();
   let maxDistance = 1;
   for (const booth of event.booths) {
-    if (excludeSet.has(booth.id)) continue;
+    if (excluded.has(booth.id)) {
+      chosenGroups.add(exhibitorGroup(booth));
+      continue;
+    }
     if (categorySet.size && !categorySet.has(booth.category)) continue;
-    const node = graph.indices.get(pointKey(booth.access));
-    const distance = distances[node];
+    const node = graph.nodes.get(pointKey(booth.access));
+    const distance = distances[node.index];
     if (distance === Infinity) continue;
     candidates.push({
       booth,
@@ -202,106 +198,72 @@ export function recommendBooths(event, { count, categories, priority, excludeIds
     });
     if (distance > maxDistance) maxDistance = distance;
   }
+
   const areaCounts = new Map();
-  const selected = [];
-  const chosenGroups = new Set();
-  for (const booth of event.booths) {
-    if (excludeSet.has(booth.id)) chosenGroups.add(exhibitorGroup(booth));
-  }
-  const score = (candidate) => {
-    const distanceScore = candidate.distance / maxDistance;
+  function score({ distance, featured, area }) {
+    const distanceScore = distance / maxDistance;
     if (priority === 'nearby') return distanceScore;
-    if (priority === 'featured') {
-      const highlightPenalty = candidate.featured ? 0 : 2;
-      return highlightPenalty + distanceScore;
-    }
-    const areaPenalty = (areaCounts.get(candidate.area) || 0) * 0.65;
-    return distanceScore + areaPenalty;
-  };
-  const isBetterCandidate = (candidate, current) => {
+    if (priority === 'featured') return distanceScore + (featured ? 0 : NON_FEATURED_PENALTY);
+    const pickedInArea = areaCounts.get(area) || 0;
+    return distanceScore + pickedInArea * REPEATED_AREA_PENALTY;
+  }
+
+  function isBetterCandidate(candidate, current) {
     const difference = score(candidate) - score(current);
-    if (difference < -EPSILON) return true;
-    if (Math.abs(difference) >= EPSILON) return false;
+    if (Math.abs(difference) >= EPSILON) return difference < -EPSILON;
     if (candidate.featured !== current.featured) return candidate.featured;
     if (candidate.distance !== current.distance) return candidate.distance < current.distance;
     return candidate.booth.code.localeCompare(current.booth.code) < 0;
-  };
+  }
+
+  const selected = [];
   while (selected.length < count && candidates.length) {
-    let best = 0;
-    for (let index = 1; index < candidates.length; index++) {
-      if (isBetterCandidate(candidates[index], candidates[best])) best = index;
-    }
-    const candidate = candidates[best];
-    candidates.splice(best, 1);
+    const candidate = takeBest(candidates, isBetterCandidate);
     const group = exhibitorGroup(candidate.booth);
     if (chosenGroups.has(group)) continue;
     chosenGroups.add(group);
     selected.push(candidate.booth);
-    const previousCount = areaCounts.get(candidate.area) || 0;
-    areaCounts.set(candidate.area, previousCount + 1);
+    areaCounts.set(candidate.area, (areaCounts.get(candidate.area) || 0) + 1);
   }
   return selected;
 }
 
 const START = 0;
 
-function routeDistance(order, distance, returnToEntrance) {
+function routeDistance(order, distance) {
   let cost = 0;
-  let from = START;
-  for (const to of order) {
-    cost += distance(from, to);
-    from = to;
-  }
-  if (returnToEntrance) cost += distance(from, START);
+  for (let index = 1; index < order.length; index++) cost += distance(order[index - 1], order[index]);
   return cost;
 }
 
 function nearestNeighborOrder(stops, first, distance) {
   const order = [first];
-  const unvisited = [];
-  for (const stop of stops) {
-    if (stop !== first) unvisited.push(stop);
-  }
+  const unvisited = stops.filter(stop => stop !== first);
   while (unvisited.length) {
     const current = order.at(-1);
-    let closestIndex = 0;
-    for (let index = 1; index < unvisited.length; index++) {
-      if (distance(current, unvisited[index]) < distance(current, unvisited[closestIndex])) {
-        closestIndex = index;
-      }
-    }
-    const closest = unvisited[closestIndex];
-    unvisited.splice(closestIndex, 1);
+    const closest = takeBest(unvisited, (next, best) => distance(current, next) < distance(current, best));
     order.push(closest);
   }
   return order;
 }
 
-function improveWithTwoOpt(order, distance, returnToEntrance) {
-  let cost = routeDistance(order, distance, returnToEntrance);
+function improveWithTwoOpt(order, distance) {
+  let cost = routeDistance(order, distance);
+  const pastLastStop = order.at(-1) === START ? order.length - 1 : order.length;
   let improved = true;
   while (improved) {
     improved = false;
-    for (let left = 0; left < order.length - 1; left++) {
-      for (let right = left + 1; right < order.length; right++) {
-        const before = left > 0 ? order[left - 1] : START;
-        let after = null;
-        if (right + 1 < order.length) after = order[right + 1];
-        else if (returnToEntrance) after = START;
+    for (let left = 1; left < pastLastStop - 1; left++) {
+      const before = order[left - 1];
+      for (let right = left + 1; right < pastLastStop; right++) {
+        const after = order[right + 1];
         const first = order[left];
         const last = order[right];
         let change = distance(before, last) - distance(before, first);
-        if (after !== null) change += distance(first, after) - distance(last, after);
+        if (after !== undefined) change += distance(first, after) - distance(last, after);
         if (change >= -EPSILON) continue;
-        let firstIndex = left;
-        let lastIndex = right;
-        while (firstIndex < lastIndex) {
-          const saved = order[firstIndex];
-          order[firstIndex] = order[lastIndex];
-          order[lastIndex] = saved;
-          firstIndex++;
-          lastIndex--;
-        }
+        const reversed = order.slice(left, right + 1).reverse();
+        order.splice(left, reversed.length, ...reversed);
         cost += change;
         improved = true;
       }
@@ -311,35 +273,30 @@ function improveWithTwoOpt(order, distance, returnToEntrance) {
 }
 
 function chooseVisitOrder(stops, distance, returnToEntrance) {
-  let best = stops;
-  let bestCost = routeDistance(best, distance, returnToEntrance);
+  const finish = returnToEntrance ? [START] : [];
+  const initialOrder = [START, ...stops, ...finish];
+  if (stops.length < 2) return initialOrder;
+  let best = { order: initialOrder, cost: routeDistance(initialOrder, distance) };
   for (const first of stops) {
     const greedy = nearestNeighborOrder(stops, first, distance);
-    const { order, cost } = improveWithTwoOpt(greedy, distance, returnToEntrance);
-    if (cost < bestCost - EPSILON) {
-      best = order;
-      bestCost = cost;
-    }
+    const candidate = improveWithTwoOpt([START, ...greedy, ...finish], distance);
+    if (candidate.cost < best.cost - EPSILON) best = candidate;
   }
-  return best;
+  return best.order;
 }
 
 function buildLegs(event, locations) {
   const graph = getHallGraph(event);
-  const nodes = [];
-  const legs = [];
-  for (const point of locations) {
-    nodes.push(graph.indices.get(pointKey(point)));
-    legs.push([]);
-  }
+  const nodes = locations.map(point => graph.nodes.get(pointKey(point)));
+  const legs = nodes.map(() => []);
   const scale = event.map.metresPerUnit > 0 ? event.map.metresPerUnit : 1;
-  for (let from = 0; from < locations.length; from++) {
-    for (let to = from + 1; to < locations.length; to++) {
-      const leg = shortestPath(graph, nodes[from], nodes[to], scale);
+  for (let from = 0; from < nodes.length - 1; from++) {
+    const paths = shortestPathsFrom(graph, nodes[from]);
+    for (let to = from + 1; to < nodes.length; to++) {
+      const leg = shortestPath(nodes[from], nodes[to], paths, scale);
       if (!leg) return null;
       legs[from][to] = leg;
-      const reversePoints = leg.points.slice();
-      reversePoints.reverse();
+      const reversePoints = leg.points.slice().reverse();
       legs[to][from] = { distance: leg.distance, points: reversePoints };
     }
   }
@@ -350,32 +307,23 @@ export function planRoute(event, { boothIds, startId, returnToEntrance }) {
   if (!boothIds.length) return { stops: [], segments: [], totalDistance: 0 };
   const boothsById = new Map();
   for (const booth of event.booths) boothsById.set(booth.id, booth);
-  const selected = [];
-  for (const id of boothIds) selected.push(boothsById.get(id));
+  const selected = boothIds.map(id => boothsById.get(id));
   const start = startingPlace(event, startId);
-  const locations = [start.point ?? start.access];
-  for (const booth of selected) locations.push(booth.access);
+  const locations = [placePoint(start), ...selected.map(booth => booth.access)];
   const legs = buildLegs(event, locations);
   if (!legs) return null;
   const distance = (from, to) => legs[from][to].distance;
-  const inputOrder = [];
-  for (let index = 0; index < selected.length; index++) inputOrder.push(index + 1);
-  const order = selected.length > 1
-    ? chooseVisitOrder(inputOrder, distance, returnToEntrance)
-    : inputOrder;
+  const inputOrder = selected.map((booth, index) => index + 1);
+  const order = chooseVisitOrder(inputOrder, distance, returnToEntrance);
   const stops = [];
-  const itinerary = [START];
-  for (const stop of order) {
-    stops.push(selected[stop - 1]);
-    itinerary.push(stop);
-  }
-  if (returnToEntrance) itinerary.push(START);
   const segments = [];
-  for (let index = 1; index < itinerary.length; index++) {
-    const from = itinerary[index - 1];
-    const to = itinerary[index];
-    const leg = legs[from][to];
+  let totalDistance = 0;
+  for (let index = 1; index < order.length; index++) {
+    const to = order[index];
+    const leg = legs[order[index - 1]][to];
+    if (to !== START) stops.push(selected[to - 1]);
     segments.push({ points: leg.points });
+    totalDistance += leg.distance;
   }
-  return { stops, segments, totalDistance: routeDistance(order, distance, returnToEntrance) };
+  return { stops, segments, totalDistance };
 }

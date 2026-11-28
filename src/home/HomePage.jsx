@@ -1,35 +1,40 @@
-import { useState } from 'react';
-import { followNavigation } from '../components/navigation.js';
+import { pageUrl } from '../planner/session.js';
 
-function EventRow({ family, records, actions, paths }) {
-  const [selectedId, setSelectedId] = useState(records[0].id);
-  const selected = records.find(record => record.id === selectedId);
-  const optionId = `catalogue-option-${family}`;
+function EventRow({ records, followLink }) {
+  const first = records[0];
+  const name = first.series || first.name;
+  const venues = [...new Set(records.map(record => record.venue))].join(' · ');
+  const metadata = (
+    <span className="event-details">
+      <span className="event-name">{name}</span>
+      <span className="event-meta"><span>{first.dateRange || first.date}</span><span>{venues}</span></span>
+    </span>
+  );
 
   return (
     <li className="event-row">
-      <div className="event-details">
-        <h2 className="event-name">{selected.series || selected.name}</h2>
-        <p className="event-date">{selected.dateRange || selected.date}</p>
-        <p className="event-venue">{selected.venue}</p>
-      </div>
-      <div className="event-choice">
-        {records.length > 1 ? (
-          <>
-            <label className="event-option-label" htmlFor={optionId}>{selected.optionLabel}</label>
-            <select className="event-option-select" id={optionId} value={selected.id} onChange={event => setSelectedId(event.target.value)}>
-              {records.map((record) => <option key={record.id} value={record.id}>{record.optionName}</option>)}
-            </select>
-          </>
-        ) : selected.optionName && <p className="event-scope">{selected.optionName}</p>}
-        <a className="primary event-planner-link" href={paths.forEvent('plan', selected.id)}
-          onClick={event => followNavigation(event, actions.navigate, 'plan', selected.id)}>동선 설계</a>
-      </div>
+      {records.length === 1 ? (
+        <a className="event-summary" href={pageUrl('plan', first.id).href} onClick={followLink}>
+          {metadata}
+        </a>
+      ) : (
+        <details name="catalogue-event">
+          <summary className="event-summary">{metadata}</summary>
+          <div className="event-options" role="group" aria-label={first.optionLabel}>
+            {records.map(record => (
+              <a key={record.id} href={pageUrl('plan', record.id).href} onClick={followLink}
+                aria-label={`${name} ${record.optionName} 동선 설계`}>
+                {record.optionName}
+              </a>
+            ))}
+          </div>
+        </details>
+      )}
     </li>
   );
 }
 
-export function HomePage({ exhibitions, resume, actions, paths, headingRef }) {
+export function HomePage({ exhibitions, resume, actions, headingRef }) {
   const groups = new Map();
   for (const exhibition of exhibitions) {
     if (!groups.has(exhibition.family)) groups.set(exhibition.family, []);
@@ -37,17 +42,15 @@ export function HomePage({ exhibitions, resume, actions, paths, headingRef }) {
   }
 
   return (
-    <section aria-labelledby="home-title">
+    <section className="catalogue" aria-labelledby="home-title">
       <h1 id="home-title" tabIndex={-1} ref={headingRef}>행사 탐색</h1>
       {resume && (
-        <p className="resume">
-          <span>최근 동선 · {resume.name}</span>
-          <a className="secondary" href={paths.forEvent('tour', resume.id)}
-            onClick={event => followNavigation(event, actions.navigate, 'tour', resume.id)}>이어서 보기</a>
-        </p>
+        <a className="resume" href={pageUrl('tour', resume.id).href} onClick={actions.followLink}>
+          <span><small>최근 동선</small>{resume.name}</span><span className="resume-action">이어서 보기</span>
+        </a>
       )}
       <ul className="event-list" aria-label="행사 목록">
-        {[...groups].map(([family, records]) => <EventRow key={family} family={family} records={records} actions={actions} paths={paths} />)}
+        {[...groups].map(([family, records]) => <EventRow key={family} records={records} followLink={actions.followLink} />)}
       </ul>
     </section>
   );

@@ -1,42 +1,34 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { ShareButton } from '../components/ShareDialog.jsx';
+import { venueLabel } from '../data/index.js';
+import { startingPlace } from './engine.js';
 import { VenueMap } from './VenueMap.jsx';
-import { maxStops } from './session.js';
-
-const format = new Intl.NumberFormat('ko-KR');
+import { maxStops, pageUrl } from './session.js';
 
 function normalizeSearchText(value) {
   return String(value ?? '').toLocaleLowerCase().replace(/[\s_-]+/g, '');
 }
 
 function matchesSearch(searchText, values) {
-  if (!searchText) return true;
-  for (const value of values) {
-    if (normalizeSearchText(value).includes(searchText)) return true;
-  }
-  return false;
+  return !searchText || values.some(value => normalizeSearchText(value).includes(searchText));
 }
 
 function ManualPicker({ event, plan, planner, actions }) {
-  const [unmappedOpen, setUnmappedOpen] = useState(false);
+  const unmappedDetails = useRef(null);
   const selectedBoothIds = new Set(plan.selected);
   const searchText = normalizeSearchText(planner.search);
-  const matchingBooths = [];
-  const unmappedMatches = [];
-
-  for (const booth of event.booths) {
-    if (planner.onlySelected && !selectedBoothIds.has(booth.id)) continue;
+  const matchingBooths = event.booths.filter(booth => {
+    if (planner.onlySelected && !selectedBoothIds.has(booth.id)) return false;
     const searchableValues = [booth.code, booth.name, booth.category, ...(booth.tags ?? [])];
-    if (matchesSearch(searchText, searchableValues)) matchingBooths.push(booth);
-  }
-  if (!planner.onlySelected) {
-    for (const booth of event.unmappedBooths ?? []) {
-      if (matchesSearch(searchText, [booth.code, booth.name, booth.zone])) unmappedMatches.push(booth);
-    }
-  }
+    return matchesSearch(searchText, searchableValues);
+  });
+  const unmappedMatches = planner.onlySelected ? [] : (event.unmappedBooths ?? []).filter(booth =>
+    matchesSearch(searchText, [booth.code, booth.name, booth.zone])
+  );
   const onlyUnmappedResults = searchText !== '' && unmappedMatches.length > 0 && matchingBooths.length === 0;
 
   useEffect(() => {
-    if (onlyUnmappedResults) setUnmappedOpen(true);
+    if (onlyUnmappedResults) unmappedDetails.current.open = true;
   }, [searchText, onlyUnmappedResults]);
 
   return (
@@ -66,22 +58,16 @@ function ManualPicker({ event, plan, planner, actions }) {
         })}
         {matchingBooths.length === 0 && <p className="results">동선에 추가할 수 있는 부스가 없습니다.</p>}
       </div>
-      {unmappedMatches.length > 0 && (
-        <details className="unmapped-booths" open={unmappedOpen} onToggle={toggle => setUnmappedOpen(toggle.currentTarget.open)}>
-          <summary>위치 미공개 명단 · {format.format(unmappedMatches.length)}곳</summary>
-          <ul>
-            {unmappedMatches.map((booth, index) => (
-              <li key={`${booth.code || booth.name}-${index}`}>
-                <strong>{booth.name}</strong><small>{[booth.code, booth.zone].filter(Boolean).join(' · ')}</small>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-      <div className="selection">
-        <span aria-live="polite">{selectedBoothIds.size}곳 선택</span>
-        <button className="primary" type="button" disabled={selectedBoothIds.size === 0} onClick={actions.makePlan}>동선 만들기</button>
-      </div>
+      <details className="unmapped-booths" ref={unmappedDetails} hidden={!unmappedMatches.length}>
+        <summary>위치 미공개 명단 · {unmappedMatches.length.toLocaleString('ko-KR')}곳</summary>
+        <ul>
+          {unmappedMatches.map((booth, index) => (
+            <li key={`${booth.code || booth.name}-${index}`}>
+              <strong>{booth.name}</strong><small>{[booth.code, booth.zone].filter(Boolean).join(' · ')}</small>
+            </li>
+          ))}
+        </ul>
+      </details>
     </>
   );
 }
@@ -121,34 +107,44 @@ function RecommendationForm({ event, planner, actions }) {
   );
 }
 
-export function PlannerPage({ exhibitions, event, plan, route, planner, actions, headingRef }) {
-  const isManualMode = planner.mode === 'manual';
-  const eventDetails = [event.date, event.venue];
-  if (!event.venue.endsWith(event.hall)) eventDetails.push(event.hall);
-  const description = eventDetails.filter(Boolean).join(' · ');
+function formatHours(day, showDate) {
+  let hours = `${day.label} ${day.opens}–${day.closes}`;
+  if (day.lastEntry) hours += ` (입장 마감 ${day.lastEntry})`;
+  if (!showDate) return hours;
+  const [, month, date] = day.date.split('-').map(Number);
+  return `${month}월 ${date}일 ${hours}`;
+}
+
+function VisitorInfo({ event }) {
   const schedule = event.schedule ?? [];
-  const dailyHours = [];
-  for (const day of schedule) {
-    let text = '';
-    if (schedule.length > 1) text = `${Number(day.date.slice(5, 7))}월 ${Number(day.date.slice(8))}일 `;
-    text += `${day.label} ${day.opens}–${day.closes}`;
-    if (day.lastEntry) text += ` (입장 마감 ${day.lastEntry})`;
-    dailyHours.push(text);
-  }
-  const hours = dailyHours.join(' · ');
+  if (!schedule.length && !event.site && !event.notice) return null;
 
   return (
-    <section aria-labelledby="plan-title">
-      <header className="screen-header">
-        <h1 id="plan-title" tabIndex={-1} ref={headingRef}>{event.name}</h1>
-        <p>{description}</p>
-        {hours && <p>{hours}</p>}
+    <details className="visitor-info">
+      <summary>관람 안내</summary>
+      <div>
+        {schedule.map(day => <p key={day.date}>{formatHours(day, schedule.length > 1)}</p>)}
         {event.site && <a className="event-address" href={event.site.directions} target="_blank" rel="noopener noreferrer">{event.site.address}</a>}
         {event.notice && <p>{event.notice}</p>}
-      </header>
-      <section className="event-settings panel" aria-label="행사 및 출발점 설정">
+      </div>
+    </details>
+  );
+}
+
+function EventSettings({ exhibitions, event, plan, actions }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const start = startingPlace(event, plan.start);
+
+  return (
+    <section className="event-settings panel" aria-label="행사 및 출발점 설정">
+      <button className="settings-toggle" type="button" aria-expanded={settingsOpen}
+        aria-controls="planner-settings" onClick={() => setSettingsOpen(!settingsOpen)}>
+        행사·출발 설정<span className="settings-start">{start.name}</span>
+        <span aria-hidden="true">{settingsOpen ? '▴' : '▾'}</span>
+      </button>
+      <div className="settings-fields" id="planner-settings">
         <label>행사·구역
-          <select value={event.id} onChange={change => actions.navigate('plan', change.target.value, { focus: false })}>
+          <select value={event.id} onChange={change => actions.navigate(pageUrl('plan', change.target.value), false)}>
             {exhibitions.map(exhibition => <option key={exhibition.id} value={exhibition.id}>{exhibition.name}</option>)}
           </select>
         </label>
@@ -166,24 +162,57 @@ export function PlannerPage({ exhibitions, event, plan, route, planner, actions,
           <input type="checkbox" checked={plan.back} onChange={change => actions.changeReturn(change.target.checked)} />
           출발점으로 돌아오기
         </label>
-      </section>
-      <div className="planner">
-        <section className="booth-panel panel" aria-labelledby="booth-title">
-          <div className="section-heading">
-            <h2 id="booth-title">부스 선택</h2>
-            {isManualMode && plan.selected.length > 0 && (
-              <button className="text-button" type="button" onClick={actions.clearBooths}>선택 해제</button>
-            )}
-          </div>
-          <div className="mode" role="group" aria-label="선택 방식">
-            <button type="button" aria-pressed={isManualMode} onClick={() => actions.setPlanner('mode', 'manual')}>직접 고르기</button>
-            <button type="button" aria-pressed={!isManualMode} onClick={() => actions.setPlanner('mode', 'recommend')}>추천받기</button>
-          </div>
-          {isManualMode
-            ? <ManualPicker key={event.id} event={event} plan={plan} planner={planner} actions={actions} />
-            : <RecommendationForm event={event} planner={planner} actions={actions} />}
-        </section>
-        <VenueMap key={event.id} event={event} plan={plan} route={route} view="plan" onToggleBooth={actions.toggleBooth} />
+      </div>
+    </section>
+  );
+}
+
+export function PlannerPage({ exhibitions, event, plan, route, planner, actions, headingRef }) {
+  const [mobilePane, setMobilePane] = useState('map');
+  const isManualMode = planner.mode === 'manual';
+  const selectedCount = plan.selected.length;
+  const description = [event.date, venueLabel(event)].filter(Boolean).join(' · ');
+
+  return (
+    <section aria-labelledby="plan-title">
+      <header className="screen-header">
+        <h1 id="plan-title" tabIndex={-1} ref={headingRef}>{event.name}</h1>
+        <p>{description}</p>
+        <div className="visit-actions">
+          <VisitorInfo key={event.id} event={event} />
+          <ShareButton hasSelection={selectedCount > 0} hasRoute={route} onClick={actions.openShare} />
+        </div>
+      </header>
+      <EventSettings exhibitions={exhibitions} event={event} plan={plan} actions={actions} />
+      <div className="mobile-panes" role="group" aria-label="설계 화면">
+        <button type="button" aria-pressed={mobilePane === 'map'} aria-controls="planner-map" onClick={() => setMobilePane('map')}>지도</button>
+        <button type="button" aria-pressed={mobilePane === 'list'} aria-controls="picker" onClick={() => setMobilePane('list')}>부스 목록</button>
+      </div>
+      <div className="planner" data-pane={mobilePane}>
+        <div className="picker-column panel">
+          <section className="booth-panel" id="picker" aria-labelledby="booth-title">
+            <div className="section-heading">
+              <h2 id="booth-title">부스 선택</h2>
+              {isManualMode && selectedCount > 0 && (
+                <button className="text-button" type="button" onClick={actions.clearBooths}>선택 해제</button>
+              )}
+            </div>
+            <div className="mode" role="group" aria-label="선택 방식">
+              <button type="button" aria-pressed={isManualMode} onClick={() => actions.setPlanner('mode', 'manual')}>직접 고르기</button>
+              <button type="button" aria-pressed={!isManualMode} onClick={() => actions.setPlanner('mode', 'recommend')}>추천받기</button>
+            </div>
+            {isManualMode
+              ? <ManualPicker key={event.id} event={event} plan={plan} planner={planner} actions={actions} />
+              : <RecommendationForm event={event} planner={planner} actions={actions} />}
+          </section>
+          {isManualMode && (
+            <div className="selection">
+              <span aria-live="polite"><strong>{selectedCount}</strong>곳 선택</span>
+              <button className="primary" type="button" disabled={!selectedCount} onClick={actions.makePlan}>동선 만들기</button>
+            </div>
+          )}
+        </div>
+        <VenueMap id="planner-map" key={event.id} event={event} plan={plan} route={route} view="plan" onToggleBooth={actions.toggleBooth} />
       </div>
     </section>
   );

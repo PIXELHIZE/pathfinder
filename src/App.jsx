@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import logo from './assets/pathfinder-logo.svg';
 import { AppHeader } from './components/AppHeader.jsx';
 import { ShareDialog } from './components/ShareDialog.jsx';
 import { HomePage } from './home/HomePage.jsx';
@@ -7,14 +6,13 @@ import { recommendBooths } from './planner/engine.js';
 import { PlannerPage } from './planner/PlannerPage.jsx';
 import { TourPage } from './planner/TourPage.jsx';
 import {
-  calculatePlan, findSavedEvent, getEvent, maxStops, openLocation, pageUrl,
-  screenTitles, shareUrl, storePlans, updateSessionPlan,
+  calculatePlan, findSavedEvent, maxStops, openLocation, pageUrl, rememberPlan,
+  screenTitles, sharedPlanPrefix, shareUrl, storePlans,
 } from './planner/session.js';
 
-function changeAddress(view, eventId) {
-  const url = pageUrl(view, eventId);
-  if (url.href !== window.location.href) window.history.pushState(null, '', url);
-  return url;
+function removeBooth(plan, id) {
+  const keep = boothId => boothId !== id;
+  return { selected: plan.selected.filter(keep), completed: plan.completed.filter(keep) };
 }
 
 export function App({ exhibitions }) {
@@ -23,14 +21,9 @@ export function App({ exhibitions }) {
   const [notice, setNotice] = useState(session.message ?? '');
   const headingRef = useRef(null);
   const focusRequest = useRef(null);
-  const { event, plan, route, planner, view, plans } = session;
-  const savedId = findSavedEvent(exhibitions, plans, event.id);
-  const paths = {
-    home: pageUrl('home').href,
-    plan: pageUrl('plan', event.id).href,
-    tour: pageUrl('tour', savedId ?? event.id).href,
-    forEvent: (screen, id) => pageUrl(screen, id).href,
-  };
+  const { event, route, planner, view, plans, replaceUrl } = session;
+  const plan = plans[event.id];
+  const savedEvent = findSavedEvent(exhibitions, plans, event.id);
 
   useEffect(() => {
     if (!notice) return;
@@ -38,79 +31,58 @@ export function App({ exhibitions }) {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  useEffect(() => {
-    storePlans(plans);
-  }, [plans]);
+  useEffect(() => storePlans(plans), [plans]);
 
   useEffect(() => {
     document.title = `부스패스 · ${screenTitles[view]}`;
   }, [view]);
 
   useLayoutEffect(() => {
-    if (session.replaceUrl && session.replaceUrl !== window.location.href) {
-      window.history.replaceState(null, '', session.replaceUrl);
-    }
-    const focus = focusRequest.current;
-    if (!focus) return;
+    if (replaceUrl && replaceUrl !== window.location.href) window.history.replaceState(null, '', replaceUrl);
+    const scroll = focusRequest.current;
+    if (scroll === null) return;
     focusRequest.current = null;
     headingRef.current?.focus({ preventScroll: true });
-    if (focus.scroll) window.scrollTo(0, 0);
+    if (scroll) window.scrollTo(0, 0);
   }, [session]);
 
   useEffect(() => {
-    function onLocationChange() {
-      const next = openLocation(exhibitions, new URL(window.location.href), session);
-      showPage(next, true);
-    }
-    function onHashChange() {
-      if (window.location.hash.startsWith('#route=')) onLocationChange();
+    function onLocationChange(change) {
+      if (change.type !== 'popstate' && !window.location.hash.startsWith(sharedPlanPrefix)) return;
+      navigate(window.location.href);
     }
     window.addEventListener('popstate', onLocationChange);
-    window.addEventListener('hashchange', onHashChange);
+    window.addEventListener('hashchange', onLocationChange);
     return () => {
       window.removeEventListener('popstate', onLocationChange);
-      window.removeEventListener('hashchange', onHashChange);
+      window.removeEventListener('hashchange', onLocationChange);
     };
   }, [exhibitions, session]);
 
-  function showPage(next, focus) {
-    if (focus) focusRequest.current = { scroll: next.view !== view };
+  function navigate(href, focus = true, current = session) {
+    const url = new URL(href);
+    if (url.href !== window.location.href) window.history.pushState(null, '', url);
+    const next = openLocation(exhibitions, url, current);
+    if (focus) focusRequest.current = next.view !== view;
     if (next.message) setNotice(next.message);
     setShare(null);
     setSession(next);
   }
 
-  function navigate(screen, id, { focus = true } = {}) {
-    let targetId = id ?? event.id;
-    if (!id && screen === 'tour' && savedId) targetId = savedId;
-    const url = changeAddress(screen, targetId);
-    const next = openLocation(exhibitions, url, session);
-    showPage(next, focus);
+  function followLink(click) {
+    const hasModifier = click.metaKey || click.ctrlKey || click.shiftKey || click.altKey;
+    if (click.defaultPrevented || click.button !== 0 || hasModifier) return;
+    click.preventDefault();
+    navigate(click.currentTarget.href);
   }
 
-  function setPlanner(field, value) {
-    setSession(current => {
-      const nextPlanner = { ...current.planner, [field]: value };
-      return { ...current, planner: nextPlanner };
-    });
-  }
-
-  function savePlan(nextPlan, { openTour = false, nextPlanner = planner } = {}) {
-    const result = nextPlan.planned ? calculatePlan(event, nextPlan) : { plan: nextPlan, route: null };
-    const next = updateSessionPlan({ ...session, planner: nextPlanner }, result.plan, result.route);
+  function applyPlan(changes, { openTour = false, plannerChanges } = {}) {
+    const result = calculatePlan(event, { ...plan, ...changes });
+    const nextPlanner = plannerChanges ? { ...planner, ...plannerChanges } : planner;
+    const next = rememberPlan({ ...session, route: result.route, planner: nextPlanner }, result.plan);
     if (result.message) setNotice(result.message);
-    if (openTour && result.route) {
-      changeAddress('tour', event.id);
-      showPage({ ...next, view: 'tour', replaceUrl: null, message: undefined }, true);
-      return;
-    }
+    if (openTour && result.route) return navigate(pageUrl('tour', event.id), true, next);
     setSession(next);
-  }
-
-  function changeStart(id) {
-    const selected = plan.selected.filter(boothId => boothId !== id);
-    const completed = plan.completed.filter(boothId => boothId !== id);
-    savePlan({ ...plan, start: id, selected, completed });
   }
 
   function toggleBooth(id) {
@@ -119,17 +91,8 @@ export function App({ exhibitions }) {
       setNotice(`한 동선에 최대 ${maxStops}곳을 선택할 수 있습니다.`);
       return;
     }
-    const selected = plan.selected.filter(boothId => boothId !== id);
-    if (!alreadySelected) selected.push(id);
-    const completed = plan.completed.filter(boothId => boothId !== id);
-    const nextPlanner = { ...planner, mode: 'manual' };
-    savePlan({ ...plan, selected, completed, planned: false }, { nextPlanner });
-  }
-
-  function clearBooths() {
-    const nextPlan = { ...plan, selected: [], completed: [], planned: false };
-    const nextPlanner = { ...planner, onlySelected: false };
-    savePlan(nextPlan, { nextPlanner });
+    const selection = alreadySelected ? removeBooth(plan, id) : { selected: [...plan.selected, id] };
+    applyPlan({ ...selection, planned: false }, { plannerChanges: { mode: 'manual' } });
   }
 
   function recommend() {
@@ -146,9 +109,9 @@ export function App({ exhibitions }) {
       return;
     }
     const selected = picks.map(booth => booth.id);
-    const nextPlan = { ...plan, selected, completed: [], planned: true };
-    const nextPlanner = { ...planner, search: '', onlySelected: true };
-    savePlan(nextPlan, { openTour: true, nextPlanner });
+    applyPlan({ selected, completed: [], planned: true }, {
+      openTour: true, plannerChanges: { search: '', onlySelected: true },
+    });
     if (picks.length < count) setNotice(`조건에 맞는 부스 ${picks.length}곳을 골랐습니다.`);
   }
 
@@ -156,24 +119,30 @@ export function App({ exhibitions }) {
     const completed = checked
       ? [...plan.completed, id]
       : plan.completed.filter(boothId => boothId !== id);
-    setSession(updateSessionPlan(session, { ...plan, completed }, route));
+    setSession(rememberPlan(session, { ...plan, completed }));
   }
 
   function replan() {
     const start = plan.completed.at(-1);
     const selected = plan.selected.filter(id => !plan.completed.includes(id));
-    savePlan({ ...plan, start, selected, completed: [] });
+    applyPlan({ start, selected, completed: [] });
   }
 
   const actions = {
     navigate,
-    openShare: () => setShare(shareUrl(session)),
-    setPlanner,
-    changeStart,
-    changeReturn: back => savePlan({ ...plan, back }),
+    followLink,
+    openShare: () => setShare(shareUrl({ event, plan, route })),
+    setPlanner: (field, value) => setSession(current => ({
+      ...current,
+      planner: { ...current.planner, [field]: value },
+    })),
+    changeStart: start => applyPlan({ ...removeBooth(plan, start), start }),
+    changeReturn: back => applyPlan({ back }),
     toggleBooth,
-    clearBooths,
-    makePlan: () => savePlan({ ...plan, planned: true }, { openTour: true }),
+    clearBooths: () => applyPlan({ selected: [], completed: [], planned: false }, {
+      plannerChanges: { onlySelected: false },
+    }),
+    makePlan: () => applyPlan({ planned: true }, { openTour: true }),
     recommend,
     toggleComplete,
     replan,
@@ -181,14 +150,14 @@ export function App({ exhibitions }) {
 
   return (
     <>
-      <AppHeader view={view} paths={paths} actions={actions} canShare={plan.selected.length > 0} hasRoute={Boolean(route)} logo={logo} />
+      <AppHeader view={view} eventId={event.id} tourEventId={savedEvent?.id ?? event.id} actions={actions} />
       <main className="app-main" id="main">
-        {view === 'home' && <HomePage exhibitions={exhibitions} resume={getEvent(exhibitions, savedId)}
-          actions={actions} paths={paths} headingRef={headingRef} />}
+        {view === 'home' && <HomePage exhibitions={exhibitions} resume={savedEvent}
+          actions={actions} headingRef={headingRef} />}
         {view === 'plan' && <PlannerPage exhibitions={exhibitions} event={event} plan={plan} route={route}
           planner={planner} actions={actions} headingRef={headingRef} />}
         {view === 'tour' && <TourPage key={event.id} event={event} plan={plan} route={route} actions={actions}
-          paths={paths} headingRef={headingRef} />}
+          headingRef={headingRef} />}
       </main>
       {share && <ShareDialog url={share} notice={setNotice} onClose={() => setShare(null)} />}
       <div className="app-status" role="status">{notice}</div>
